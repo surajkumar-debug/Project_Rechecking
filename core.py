@@ -87,6 +87,17 @@ def parse_mapping(raw):
         for std, al in _MAP_ALIASES.items():
             for j, h in enumerate(hdr):
                 if h in al and j not in pos.values(): pos[std] = j; break
+        # loose matching (naam me keyword ho to bhi chalega)
+        def loose(std, test):
+            if std in pos: return
+            for j, h in enumerate(hdr):
+                if h and j not in pos.values() and test(h): pos[std] = j; return
+        has = lambda h, *ws: any(w in h for w in ws)
+        loose("Source header", lambda h: has(h, "source", "src") and has(h, "head", "col", "field", "name"))
+        loose("Center Data header", lambda h: has(h, "center", "centre", "cd") and has(h, "head", "col", "field", "name", "data"))
+        loose("Source", lambda h: has(h, "source", "src", "tab", "sheet") and not has(h, "head", "col"))
+        loose("Field", lambda h: has(h, "field", "param", "item"))
+        loose("Kind", lambda h: has(h, "kind", "type"))
         if {"Source", "Source header"} <= set(pos) and ("Center Data header" in pos or "Field" in pos):
             body = raw.iloc[i + 1:]
             m = pd.DataFrame({std: (body.iloc[:, pos[std]].values if std in pos else [""] * len(body)) for std in MAP_COLS})
