@@ -84,24 +84,30 @@ def build_frames(x, cfg):
     cd_all = load_sheet(x, cdc, project)
     cd1 = cd_all.drop_duplicates(cdc["tc"]).set_index(cdc["tc"])
     tcs = list(cd1.index)
-    src = {}
+    src = {}; warns = []
     for k, s in cfg["SRC"].items():
         if not s.get("sheet") or s["sheet"] not in x.sheet_names: continue
         d = load_sheet(x, s, project)
-        if s["tc"] not in d.columns: continue
+        if s["tc"] not in d.columns:
+            warns.append(f"{k}: TC column {s['tc']!r} nahi mila. Available: {list(d.columns)[:30]}"); continue
         src[k] = d[~d[s["tc"]].duplicated()].set_index(s["tc"])
     cs = cfg.get("CSR")
     if cs and cs.get("sheet") in x.sheet_names:
         c = load_sheet(x, cs, project)
-        c = c[c[cs["tc"]].isin(tcs)].copy()
-        c["_d"] = c[cs["day"]].astype(str).str.extract(r"(\d+)")[0].astype(float)
-        c = c.sort_values([cs["tc"], "_d"])
-        cams = [m for m in cs["cams"] if m in c.columns]
-        c["_w"] = c[cams].max(axis=1)
-        g = c.groupby(cs["tc"])
-        src["CSR"] = pd.DataFrame({"status": g[cs["status"]].apply(_join_uniq), "maxcam": g["_w"].max(),
-                                   "param": g[cs["param"]].apply(_join_uniq), "remarks": g[cs["remarks"]].apply(_join_uniq)})
-    return cd_all, cd1, tcs, src
+        miss = [m for m in (cs["tc"], cs["status"], cs["param"], cs["remarks"]) if m not in c.columns]
+        if miss:
+            warns.append(f"CSR sheet me ye columns nahi mile: {miss}. Available: {list(c.columns)[:40]}")
+        else:
+            c = c[c[cs["tc"]].isin(tcs)].copy()
+            if cs.get("day") in c.columns:
+                c["_d"] = c[cs["day"]].astype(str).str.extract(r"(\d+)")[0].astype(float)
+                c = c.sort_values([cs["tc"], "_d"])
+            cams = [m for m in cs["cams"] if m in c.columns]
+            c["_w"] = c[cams].max(axis=1) if cams else np.nan
+            g = c.groupby(cs["tc"])
+            src["CSR"] = pd.DataFrame({"status": g[cs["status"]].apply(_join_uniq), "maxcam": g["_w"].max(),
+                                       "param": g[cs["param"]].apply(_join_uniq), "remarks": g[cs["remarks"]].apply(_join_uniq)})
+    return cd_all, cd1, tcs, src, warns
 
 def gap(c, s, kind, tol):
     cb = pd.isna(c) or str(c).strip() == ""; sb = pd.isna(s) or str(s).strip() == ""
@@ -114,9 +120,9 @@ def gap(c, s, kind, tol):
     return "OK" if str(c).strip().lower() == str(s).strip().lower() else "MISMATCH"
 
 def run(x, cfg):
-    cd_all, cd1, tcs, src = build_frames(x, cfg)
+    cd_all, cd1, tcs, src, bw = build_frames(x, cfg)
     tol = cfg.get("PCT_TOL", 0.006)
-    wide = pd.DataFrame(index=tcs); long_rows = []; summary = []; warns = []
+    wide = pd.DataFrame(index=tcs); long_rows = []; summary = []; warns = list(bw)
     for label, cdcol, sk, scol, kind in cfg["MAP"]:
         cdcol, scol = _c(cdcol), _c(scol) if sk != "CSR" else scol
         if cdcol not in cd1.columns: warns.append(f"Center Data me column nahi mila: {cdcol!r}"); continue
@@ -151,7 +157,7 @@ def run(x, cfg):
 
 def auto_detect(x, cfg, min_match=0.95, min_vals=30):
     """Center Data ke har column ko har source column se value-match karke best mapping suggest karta hai."""
-    cd_all, cd1, tcs, src = build_frames(x, cfg)
+    cd_all, cd1, tcs, src, _ = build_frames(x, cfg)
     rows = []
     def norm(s):
         n = pd.to_numeric(s, errors="coerce")
@@ -191,3 +197,4 @@ def to_excel_bytes(res):
             for col in sh.columns: sh.column_dimensions[col[0].column_letter].width = 16
             for cell in sh[1]: cell.font = Font(bold=True)
     return bio.getvalue()
+    
