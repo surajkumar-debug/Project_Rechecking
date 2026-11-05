@@ -19,8 +19,8 @@ with st.sidebar:
 if not up:
     st.info("Left side se Excel upload karo."); st.stop()
 
-@st.cache_data(show_spinner=False)
-def read(b): return pd.ExcelFile(b)
+@st.cache_resource(show_spinner=False)
+def read(b): return pd.ExcelFile(io.BytesIO(b))
 x = read(up.getvalue())
 sheets = x.sheet_names
 
