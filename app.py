@@ -1,7 +1,6 @@
-import json
+import io, json
 import pandas as pd, streamlit as st
 import core
-import io
 
 st.set_page_config(page_title="Center Data Recheck", layout="wide")
 st.title("Center Data Recheck Portal")
@@ -39,7 +38,15 @@ with st.expander("1. Sheet settings (naye project me yahi badalna hai)", expande
         old = cfg["SRC"].get(r.Key, {})
         new[r.Key] = {**old, "sheet": r.Sheet, "header": int(r.Header or 0), "tc": r.TC, "project": r.Project or ""}
     cfg["SRC"] = new
-    st.caption("Header = header row ka number (0 = pehli row, Audit jaisi 2-row header me 1). CSR sheet ki settings JSON me 'CSR' section se aati hain.")
+    cs = cfg["CSR"]
+    st.markdown("**CSR sheet**")
+    d1, d2, d3, d4 = st.columns(4)
+    cs["sheet"] = d1.selectbox("CSR sheet", sheets, index=sheets.index(cs["sheet"]) if cs["sheet"] in sheets else 0)
+    cs["tc"] = d2.text_input("CSR TC column", cs["tc"]); cs["day"] = d3.text_input("CSR day column (optional)", cs["day"]); cs["status"] = d4.text_input("CSR status column", cs["status"])
+    e1, e2, e3 = st.columns(3)
+    cs["param"] = e1.text_input("Rejected param column", cs["param"]); cs["remarks"] = e2.text_input("CSR remarks column", cs["remarks"])
+    cs["cams"] = [v.strip() for v in e3.text_input("Working cam columns (comma se)", ", ".join(cs["cams"])).split(",") if v.strip()]
+    st.caption("Header = header row ka number (0 = pehli row, Audit jaisi 2-row header me 1).")
 
 with st.expander("2. Column mapping", expanded=not cfg_up):
     if st.button("Auto-detect mapping (value match se)"):
