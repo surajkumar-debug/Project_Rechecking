@@ -8,7 +8,7 @@ DEFAULT_TABS = {"Center Data": ["Center Data"], "PM": ["PM Compile", "PM"], "Cal
 MAP_COLS = ["Field", "Source", "Center Data header", "Source header", "Kind"]
 
 # Field, Source, Center Data header (aliases), Source header (aliases), Kind(num/pct/text)
-# Aliases: , ya | se alag karo. TC / Day rows special hain.
+# Multiple aliases may be separated by "," or "|". The TC and Day rows are special.
 _ROWS = [
     ["TC", "Center Data", "", "TC Code", ""], ["TC", "PM", "", "TC Code", ""], ["TC", "Calling", "", "TC Code", ""],
     ["TC", "CSR", "", "TC Code", ""], ["TC", "Audit", "", "Venue Code | TC Code", ""], ["TC", "Audit Final", "", "TC_CODE | TC Code", ""],
@@ -80,7 +80,7 @@ def canon_source(name):
     return pool[mt[0]] if mt else str(name).strip()
 
 def parse_mapping(raw):
-    """Google Sheet ke Mapping tab (header=None frame) -> standard mapping DataFrame, ya None."""
+    """Convert the raw Mapping tab (header=None frame) into a standard mapping DataFrame, or None if unrecognised."""
     for i in range(min(15, len(raw))):
         hdr = [nk(v) if pd.notna(v) else "" for v in raw.iloc[i].tolist()]
         pos = {}
@@ -154,16 +154,16 @@ def frames_from_excel(xf, tabs=None):
     frames, warns = {}, []
     for k in SOURCES:
         t = pick_tab(xf.sheet_names, [(tabs or {}).get(k)] if (tabs or {}).get(k) else DEFAULT_TABS[k])
-        if t is None: warns.append(f"{k}: tab nahi mila (available: {xf.sheet_names})"); continue
+        if t is None: warns.append(f"{k}: tab not found (available: {xf.sheet_names})"); continue
         frames[k] = xf.parse(t, header=None)
     return frames, warns
 
 def prep(raw, tc_aliases):
-    """Header row khud dhoondhta hai (TC column ke naam se), duplicate headers ko .1 .2 lagata hai."""
+    """Locate the header row via the TC column name and suffix duplicate headers with .1, .2, etc."""
     al = {nk(a) for a in tc_aliases}; h = None
     for i in range(min(10, len(raw))):
         if any(nk(v) in al for v in raw.iloc[i].tolist() if pd.notna(v)): h = i; break
-    if h is None: return None, None, f"TC column {tc_aliases} top 10 rows me nahi mila"
+    if h is None: return None, None, f"TC column {tc_aliases} not found in the first 10 rows"
     heads, seen = [], {}
     for i, v in enumerate(raw.iloc[h].tolist()):
         name = f"Unnamed: {i}" if (pd.isna(v) or str(v).strip() == "") else _c(v)
@@ -218,7 +218,7 @@ def run(frames, mapping, tol=0.006, auto=True):
         df, lk, err = prep(raw, tcal.get(k, ["TC Code"]))
         if err: warns.append(f"{k}: {err}"); continue
         dfs[k] = (df, lk)
-    if "Center Data" not in dfs: raise ValueError("Center Data load nahi hui: " + "; ".join(warns))
+    if "Center Data" not in dfs: raise ValueError("Center Data could not be loaded: " + "; ".join(warns))
     cd_df, cd_lk = dfs["Center Data"]
     tcs = list(dict.fromkeys(cd_df["__tc"]))
     # ---- Foldering: Audit Final ka folder status vs Center Data ----
@@ -227,12 +227,12 @@ def run(frames, mapping, tol=0.006, auto=True):
             ks = [k for k in lk if "folder" in k]
             ks.sort(key=lambda k: (0 if "status" in k else 1, len(k)))
             return lk[ks[0]] if ks else None
-        if "Audit Final" not in dfs: warns.append("Foldering skip: Audit Final tab load nahi hui")
+        if "Audit Final" not in dfs: warns.append("Foldering check skipped: the Audit Final tab could not be loaded")
         else:
             sc_, cc_ = _fcol(dfs["Audit Final"][1]), _fcol(cd_lk)
             if sc_ and cc_: m = pd.concat([m, pd.DataFrame([["Foldering", "Audit Final", cc_, sc_, "text"]], columns=MAP_COLS)], ignore_index=True)
-            elif not sc_: warns.append("Foldering skip: Audit Final me 'folder' naam ka column nahi mila (Mapping tab me row daalo)")
-            else: warns.append(f"Foldering skip: Center Data me 'folder' naam ka column nahi mila (Audit Final: {sc_})")
+            elif not sc_: warns.append("Foldering check skipped: no column containing 'folder' was found in Audit Final (add a Foldering row to the Mapping tab)")
+            else: warns.append(f"Foldering check skipped: no column containing 'folder' was found in Center Data (Audit Final column: {sc_})")
     if auto:
         used = {nk(a) for _, r in m.iterrows() for a in split_alias(r["Center Data header"])}
         am = auto_map(dfs, used, tcs, tol, skip={nk(a) for a in tcal.get('Center Data', [])} | {nk(a) for _, r in m[m['Field'].str.lower() == 'day'].iterrows() for a in split_alias(r['Source header'])})
@@ -245,12 +245,12 @@ def run(frames, mapping, tol=0.006, auto=True):
         kind = (r["Kind"].strip().lower() or "text")
         cd_al, s_al = split_alias(r["Center Data header"]), split_alias(r["Source header"])
         cv = field(cd_df, cd_lk, cd_al, kind)
-        if cv is None: warns.append(f"[{f}] Center Data me header nahi mila: {cd_al}"); continue
-        if sk not in dfs: warns.append(f"[{f}] source '{sk}' load nahi hui"); continue
+        if cv is None: warns.append(f"[{f}] Header not found in Center Data: {cd_al}"); continue
+        if sk not in dfs: warns.append(f"[{f}] Source '{sk}' could not be loaded"); continue
         sdf, slk = dfs[sk]
         sv = field(sdf, slk, s_al, kind)
         if sv is None:
-            warns.append(f"[{f}] {sk} me header nahi mila: {s_al}. Available: {list(slk.values())[:40]}"); continue
+            warns.append(f"[{f}] Header not found in {sk}: {s_al}. Available headers: {list(slk.values())[:40]}"); continue
         cv = cv.reindex(tcs); sv = sv.reindex(tcs); ins = set(sdf["__tc"])
         gp = [gap(cv[t], sv[t], kind, tol) if t in ins else "NOT IN SOURCE" for t in tcs]
         rb = next((v for k_, v in RULE_BLANK.items() if nk(k_) == nk(cd_al[0])), None) if cd_al else None
@@ -279,7 +279,7 @@ def run(frames, mapping, tol=0.006, auto=True):
     for _, r in m[m["Field"].str.lower() == "day"].iterrows(): day_al += split_alias(r["Source header"]) + split_alias(r["Center Data header"])
     day_al += ["Exam Day Number", "Day", "Exam Day"]
     dcol = next((cd_lk[nk(a)] for a in day_al if nk(a) in cd_lk), None)
-    if dcol is None: warns.append("Day column nahi mila - rule check sab rows pe chala")
+    if dcol is None: warns.append("Day column not found; the rule check was applied to all rows")
     d1 = cd_df[cd_df[dcol].map(num) == 1] if dcol else cd_df
     d1 = d1.drop_duplicates("__tc")
     def g(name, kind="num"):
@@ -291,7 +291,7 @@ def run(frames, mapping, tol=0.006, auto=True):
     rr = []
     for label, col, fn in CHECKS:
         try: exp = pd.to_numeric(fn(g), errors="coerce").fillna(0); act = g(col).fillna(0)
-        except KeyError as e: warns.append(f"Rule '{label}' skip: column nahi mila {e}"); continue
+        except KeyError as e: warns.append(f"Rule '{label}' skipped: column not found {e}"); continue
         for t in act.index[(act - exp).abs() > 0.01]:
             rr.append(dict(TC=t, Rule=label, Column=col, CenterData=act[t], Expected=exp[t], Diff=round(act[t] - exp[t], 2)))
     rules = pd.DataFrame(rr, columns=["TC", "Rule", "Column", "CenterData", "Expected", "Diff"])
@@ -305,8 +305,8 @@ def run(frames, mapping, tol=0.006, auto=True):
     return dict(summary=summ, gaps=gaps, rules=rules, compare=wide, foldering=fold, warns=warns, n=len(tcs))
 
 def auto_map(dfs, used, tcs, tol=0.006, min_match=0.95, min_vals=30, skip=()):
-    """Mapping me jo Center Data columns nahi hain, unke liye source columns auto dhoondhta hai
-    (values >=95% match, ya same header naam + >=50% match)."""
+    """For Center Data columns missing from the mapping, find matching source columns automatically
+    (>=95% value agreement, or identical header name with >=50% agreement)."""
     cd_df, cd_lk = dfs["Center Data"]; cache = {}
     def ser(key, col, kind):
         ck = (key, col, kind)
@@ -341,7 +341,7 @@ def auto_map(dfs, used, tcs, tol=0.006, min_match=0.95, min_vals=30, skip=()):
                 if (eq >= min_match and ns >= 0.5) or (ns == 1 and eq >= 0.5):
                     sc_ = eq + 0.01 * ns
                     if best is None or sc_ > best[0]: best = (sc_, key, sc, eq)
-        if best: rows.append([col, best[1], col, best[2], kind, f"auto {best[3]*100:.0f}% match"])
+        if best: rows.append([col, best[1], col, best[2], kind, f"Auto-matched ({best[3]*100:.0f}% agreement)"])
     return pd.DataFrame(rows, columns=MAP_COLS + ["How"])
 
 def to_excel_bytes(res):
@@ -363,3 +363,4 @@ def to_excel_bytes(res):
             for col in sh.columns: sh.column_dimensions[col[0].column_letter].width = 16
             for cell in sh[1]: cell.font = Font(bold=True)
     return bio.getvalue()
+  
