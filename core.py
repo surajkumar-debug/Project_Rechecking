@@ -75,6 +75,12 @@ def num(v):
     except ValueError: return np.nan
     return x / 100 if pct else x
 
+def txt(v):
+    """Compare ke liye text: 5.0 -> '5', extra spaces hatao, lower."""
+    if v is None or (isinstance(v, float) and np.isnan(v)): return ""
+    if isinstance(v, (float, np.floating)) and float(v).is_integer(): v = int(v)
+    return _c(v).lower()
+
 def norm_tc(v):
     if isinstance(v, (float, np.floating)) and not np.isnan(v) and float(v).is_integer(): return str(int(v))
     return str(v).strip()
@@ -133,20 +139,20 @@ def field(df, lk, aliases, kind):
         return s_ if uniq else s_.groupby(level=0, sort=False).max()
     v = df[cols].bfill(axis=1).iloc[:, 0]
     if uniq:
-        return pd.Series(v.values, index=df["__tc"].values).map(lambda z: str(z).strip() if pd.notna(z) else np.nan)
+        return pd.Series(v.values, index=df["__tc"].values).map(lambda z: _c(int(z) if isinstance(z, (float, np.floating)) and float(z).is_integer() else z) if pd.notna(z) else np.nan)
     d = pd.DataFrame({"t": df["__tc"].values, "v": v.values}).dropna()
     d["v"] = d["v"].astype(str).str.strip(); d = d[d["v"] != ""].drop_duplicates()
     return d.groupby("t", sort=False)["v"].agg(" | ".join)
 
 def gap(c, s, kind, tol):
-    cb = pd.isna(c) or str(c).strip() == ""; sb = pd.isna(s) or str(s).strip() == ""
+    cb = txt(c) == ""; sb = txt(s) == ""
     if cb and sb: return "OK"
     if cb: return "MISSING IN CD"
     if sb: return "SOURCE BLANK"
     if kind in ("num", "pct"):
         a, b = num(c), num(s)
         if not (np.isnan(a) or np.isnan(b)): return "OK" if abs(a - b) < (tol if kind == "pct" else 1e-4) else "MISMATCH"
-    return "OK" if str(c).strip().lower() == str(s).strip().lower() else "MISMATCH"
+    return "OK" if txt(c) == txt(s) else "MISMATCH"
 
 def run(frames, mapping, tol=0.006, auto=True):
     warns = []
@@ -202,6 +208,8 @@ def run(frames, mapping, tol=0.006, auto=True):
     for k in ["OK", "MISMATCH", "MISSING IN CD", "SOURCE BLANK", "NOT IN SOURCE", "BLANK BY RULE"]:
         if k not in summ: summ[k] = 0
     summ = summ[["Field", "Source", "OK", "MISMATCH", "MISSING IN CD", "SOURCE BLANK", "NOT IN SOURCE", "BLANK BY RULE"]]
+    num_cols = [c for c in summ.columns if c not in ("Field", "Source")]
+    summ[num_cols] = summ[num_cols].astype(int)
     gaps = pd.DataFrame(long_rows, columns=["TC", "Field", "CenterData", "Source", "Gap"])
     # ---- rule re-check (day 1) ----
     day_al = []
@@ -257,7 +265,7 @@ def auto_map(dfs, used, tcs, tol=0.006, min_match=0.95, min_vals=30, skip=()):
                     av, bv = a.values.astype(float), b.values.astype(float)
                     eq = float(np.mean((np.isnan(av) & np.isnan(bv)) | (np.abs(av - bv) < (tol if kind == "pct" else 1e-4))))
                 else:
-                    eq = float(np.mean((a.fillna("").str.lower() == b.fillna("").str.lower()).values))
+                    eq = float(np.mean((a.map(txt) == b.map(txt)).values))
                 ns = difflib.SequenceMatcher(None, nk(col), nk(sc)).ratio()
                 if (eq >= min_match and ns >= 0.5) or (ns == 1 and eq >= 0.5):
                     sc_ = eq + 0.01 * ns

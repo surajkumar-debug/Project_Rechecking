@@ -34,6 +34,8 @@ with st.sidebar:
     mode = st.radio("Data kahan se?", ["Control Google Sheet", "Excel upload"])
     auto = st.checkbox("Auto-match extra columns", True, help="Mapping me jo columns nahi hain unhe value / naam match se khud dhoondta hai")
     tol = st.number_input("% tolerance", 0.0, 0.1, 0.006, 0.001, format="%.3f")
+    if st.button("Google Sheet data refresh"):
+        st.cache_data.clear(); st.session_state.pop("res", None); st.rerun()
 
 frames, load_warns, mapping, label = {}, [], None, "project"
 
@@ -65,7 +67,7 @@ else:
 
 with st.expander("Mapping (Field -> header aliases)"):
     st.caption("Header ke naam se match hota hai, position se nahi. Ek field ke multiple naam | se alag karo.")
-    mapping = st.data_editor(mapping, num_rows="dynamic", use_container_width=True, key="map")
+    mapping = st.data_editor(mapping, num_rows="dynamic", width="stretch", key="map")
     st.download_button("Mapping CSV download", mapping.to_csv(index=False), "mapping.csv")
 
 if st.button("Recheck chalao", type="primary"):
@@ -85,9 +87,9 @@ if res:
     m4.metric("Clean fields", int(((s["OK"] + s["BLANK BY RULE"]) == res["n"]).sum()))
     st.download_button("Excel download", core.to_excel_bytes(res), f"Recheck_{st.session_state['label']}.xlsx", type="primary")
     t1, t2, t3, t4 = st.tabs(["Summary", "Gaps (center-wise)", "Rule errors", "Full compare"])
-    with t1: st.dataframe(s, use_container_width=True, hide_index=True)
+    with t1: st.dataframe(s, width="stretch", hide_index=True)
     with t2:
         f = st.multiselect("Field filter", sorted(res["gaps"]["Field"].unique()))
-        st.dataframe(res["gaps"][res["gaps"]["Field"].isin(f)] if f else res["gaps"], use_container_width=True, hide_index=True)
-    with t3: st.dataframe(res["rules"], use_container_width=True, hide_index=True)
-    with t4: st.dataframe(res["compare"], use_container_width=True)
+        st.dataframe(res["gaps"][res["gaps"]["Field"].isin(f)] if f else res["gaps"], width="stretch", hide_index=True)
+    with t3: st.dataframe(res["rules"], width="stretch", hide_index=True)
+    with t4: st.dataframe(res["compare"], width="stretch")
