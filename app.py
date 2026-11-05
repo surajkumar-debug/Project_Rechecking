@@ -1,4 +1,4 @@
-import datetime as dt, io
+import datetime as dt, io, re
 import numpy as np, pandas as pd, streamlit as st
 import core, gsheet
 
@@ -105,16 +105,87 @@ if res:
     m1.metric("Centers", res["n"]); m2.metric("Gap cells", len(res["gaps"])); m3.metric("Rule errors", len(res["rules"]))
     m4.metric("Clean fields", int(((s["OK"] + s["BLANK BY RULE"]) == res["n"]).sum()))
     st.download_button("Download Excel report", core.to_excel_bytes(res), f"Recheck_{st.session_state['label']}.xlsx", type="primary")
+    def tc_match(series, query):
+        """Keep rows whose TC contains any of the comma/space separated search terms."""
+        terms = [t.strip().lower() for t in re.split(r"[,\s]+", query) if t.strip()]
+        if not terms: return pd.Series(True, index=series.index)
+        v = series.astype(str).str.lower()
+        return v.apply(lambda x: any(t in x for t in terms))
+
+    def csv_btn(df, name, key):
+        st.download_button("Download filtered data (CSV)", df.to_csv(index=False), f"{name}.csv", key=key)
+
     t1, t2, t3, t5, t4 = st.tabs(["Summary", "Gaps (center-wise)", "Rule errors", "Foldering (No)", "Full compare"])
-    with t1: st.dataframe(s, width="stretch", hide_index=True, height=35 * (len(s) + 1) + 3)
+
+    with t1:
+        issue_cols = ["MISMATCH", "MISSING IN CD", "SOURCE BLANK"]
+        only_issues = st.checkbox("Show only fields with issues", False, key="f_sum_issue")
+        sv = s[(s[issue_cols].sum(axis=1) > 0)] if only_issues else s
+        st.dataframe(sv, width="stretch", hide_index=True, height=35 * (len(sv) + 1) + 3)
+        if (s[issue_cols].sum(axis=1) > 0).any():
+            st.caption("Issues by field")
+            st.bar_chart(s.set_index("Field")[issue_cols], height=300)
+
     with t2:
-        f = st.multiselect("Field filter", sorted(res["gaps"]["Field"].unique()))
-        st.dataframe(res["gaps"][res["gaps"]["Field"].isin(f)] if f else res["gaps"], width="stretch", hide_index=True, height=520)
-    with t3: st.dataframe(res["rules"], width="stretch", hide_index=True, height=520)
+        g = res["gaps"]
+        c1, c2, c3 = st.columns([2, 2, 2])
+        f_field = c1.multiselect("Field", sorted(g["Field"].unique()), key="f_g_field")
+        f_gap = c2.multiselect("Gap type", sorted(g["Gap"].unique()), key="f_g_gap")
+        f_tc = c3.text_input("Search TC code (comma separated)", key="f_g_tc")
+        view = st.radio("View", ["Detail", "Count per center", "Count per field"], horizontal=True, key="f_g_view")
+        gv = g
+        if f_field: gv = gv[gv["Field"].isin(f_field)]
+        if f_gap: gv = gv[gv["Gap"].isin(f_gap)]
+        gv = gv[tc_match(gv["TC"], f_tc)]
+        st.caption(f"{len(gv):,} of {len(g):,} rows | {gv['TC'].nunique():,} centers")
+        if view == "Count per center":
+            gv = gv.groupby("TC").agg(Issues=("Field", "size"), Fields=("Field", lambda x: ", ".join(sorted(set(x))))).reset_index().sort_values("Issues", ascending=False)
+        elif view == "Count per field":
+            gv = gv.pivot_table(index="Field", columns="Gap", values="TC", aggfunc="count", fill_value=0).reset_index()
+        st.dataframe(gv, width="stretch", hide_index=True, height=520)
+        csv_btn(gv, "gaps_filtered", "dl_gaps")
+
+    with t3:
+        r = res["rules"]
+        if r.empty: st.info("No rule errors were found.")
+        else:
+            c1, c2 = st.columns([2, 2])
+            f_rule = c1.multiselect("Rule", sorted(r["Rule"].unique()), key="f_r_rule")
+            f_tc = c2.text_input("Search TC code (comma separated)", key="f_r_tc")
+            rv = r[r["Rule"].isin(f_rule)] if f_rule else r
+            rv = rv[tc_match(rv["TC"], f_tc)]
+            st.caption(f"{len(rv):,} of {len(r):,} rows | {rv['TC'].nunique():,} centers")
+            st.dataframe(rv, width="stretch", hide_index=True, height=520)
+            csv_btn(rv, "rule_errors_filtered", "dl_rules")
+
     with t5:
         fd = res.get("foldering")
         if fd is None or fd.empty: st.info("No centers with Folder Status 'No' were found, or the foldering column could not be detected. Please check the warnings above.")
-        else: st.caption(f"{len(fd)} centers with Folder Status 'No' (in Audit Final or Center Data). The Gap column shows whether both sources agree."); st.dataframe(fd, width="stretch", hide_index=True, height=520)
-    with t4: st.dataframe(res["compare"], width="stretch", height=520)
+        else:
+            st.caption(f"{len(fd)} centers with Folder Status 'No' (in Audit Final or Center Data). The Gap column shows whether both sources agree.")
+            c1, c2 = st.columns([2, 2])
+            f_gap = c1.multiselect("Gap", sorted(fd["Gap"].unique()), key="f_f_gap")
+            f_tc = c2.text_input("Search TC code (comma separated)", key="f_f_tc")
+            fv = fd[fd["Gap"].isin(f_gap)] if f_gap else fd
+            fv = fv[tc_match(fv["TC"], f_tc)]
+            st.dataframe(fv, width="stretch", hide_index=True, height=520)
+            csv_btn(fv, "foldering_filtered", "dl_fold")
+
+    with t4:
+        cmp_df = res["compare"]
+        fields = sorted({c.rsplit(" | ", 1)[0] for c in cmp_df.columns if c.endswith((" | CD", " | SRC", " | GAP"))})
+        issue_status = set(res["gaps"]["Gap"].unique())
+        c1, c2, c3 = st.columns([2, 2, 2])
+        f_fields = c1.multiselect("Fields to display", fields, key="f_c_fields")
+        f_tc = c2.text_input("Search TC code (comma separated)", key="f_c_tc")
+        only_bad = c3.checkbox("Only centers with issues", False, key="f_c_bad")
+        shown = f_fields or fields
+        cols = [f"{f} | {k}" for f in shown for k in ("CD", "SRC", "GAP") if f"{f} | {k}" in cmp_df.columns]
+        cv = cmp_df[cols]
+        gap_cols = [c for c in cols if c.endswith(" | GAP")]
+        if only_bad and gap_cols: cv = cv[cv[gap_cols].isin(issue_status).any(axis=1)]
+        cv = cv[tc_match(cv.index.to_series(), f_tc)]
+        st.caption(f"{len(cv):,} of {len(cmp_df):,} centers")
+        st.dataframe(cv, width="stretch", height=520)
 
 st.markdown("<div style='height:80px'></div>", unsafe_allow_html=True)
