@@ -2,59 +2,46 @@ import io, re, difflib
 import numpy as np, pandas as pd
 from openpyxl.styles import PatternFill, Font
 
-DEFAULT_CFG = {
-    "PROJECT": "",
-    "CD": {"sheet": "Center Data", "header": 0, "tc": "TC Code", "day_col": "Exam Day Number", "project": "Project Code"},
-    "SRC": {
-        "PM": {"sheet": "PM Compile", "header": 0, "tc": "TC Code", "project": "Project Code"},
-        "Calling": {"sheet": "Calling", "header": 0, "tc": "TC Code", "project": "Project"},
-        "Audit": {"sheet": "Audit", "header": 1, "tc": "Venue Code", "project": "Project Code", "rename": {"Unnamed: 38": "As per Audit Max"}},
-        "AuditFinal": {"sheet": "Audit Final", "header": 0, "tc": "TC_CODE", "project": "Project Code"},
-    },
-    "CSR": {"sheet": "CSR", "header": 0, "tc": "TC Code", "project": "Project code", "day": "Exam Day",
-            "status": "CSR Received Status",
-            "cams": ["Working Cam Count S1", "Working Cam Count S2", "Working Cam Count S3", "Working Cam Count S4"],
-            "param": "Rejected Parameteres", "remarks": "Remarks"},
-    "MAP": [
-        ["Actual Cam", "Actual Camera", "PM", "Final Cam Count", "num"],
-        ["QC Cam", "QC Camera", "PM", "QC Cam Count", "num"],
-        ["Monitor", "Monitor Count", "PM", "Final Monitor Count", "num"],
-        ["UPS", "UPS Count", "PM", "Final UPS Count", "num"],
-        ["HMS %", "HMS%", "PM", "HMS Avg Hit Per%", "pct"],
-        ["DVR Installed", "Total DVR Count", "PM", "HMS DVR Installed Count", "num"],
-        ["DVR Live", "Online DVR Count", "PM", "HMS No of DVR Hit", "num"],
-        ["VOIP Status", "VOIP Status", "PM", "VOIP Final Installation Status", "text"],
-        ["Common Center", "Common Center", "PM", "Common Centers", "text"],
-        ["CCTV Installed", "CCTV Installation Status", "Calling", "CCTV Setup Installed", "text"],
-        ["ISP", "Internet Installation Status", "Calling", "Internet Installation", "text"],
-        ["Monitor Status", "Monitor Installation Status", "Calling", "Monitor Installed", "text"],
-        ["UPS Status", "UPS.2", "Calling", "UPS Installed", "text"],
-        ["Calling Status", "Calling Status", "Calling", "calling status", "text"],
-        ["Remarks", "Remarks", "Calling", "remarks", "text"],
-        ["Max Cam (Audit)", "MAX Cam RCV as per Data", "Audit", "As per Audit Max", "num"],
-        ["Data %", "Data %", "Audit", "Data %", "pct"],
-        ["Audit %", "Audit %", "Audit", "Audit %", "pct"],
-        ["Audit Status", "Audit Status", "Audit", "Audit Status", "text"],
-        ["CSR Status", "CSR Status", "CSR", "status", "text"],
-        ["CSR Max Cam", "CSR Camera/VOIP", "CSR", "maxcam", "num"],
-        ["Rejected Param", "Rejected Parameter", "CSR", "param", "text"],
-        ["Rejected Remarks", "Rejected Remarks", "CSR", "remarks", "text"],
-    ],
-    "PCT_TOL": 0.006,
-}
+SOURCES = ["Center Data", "PM", "Calling", "CSR", "Audit", "Audit Final"]
+DEFAULT_TABS = {"Center Data": ["Center Data"], "PM": ["PM Compile", "PM"], "Calling": ["Calling Sheet", "Calling"],
+                "CSR": ["CSR Audit", "CSR"], "Audit": ["Audit Home", "Audit"], "Audit Final": ["Audit Final"]}
+MAP_COLS = ["Field", "Source", "Center Data header", "Source header", "Kind"]
 
-def _c(s): return re.sub(r"\s+", " ", str(s).replace("\xa0", " ")).strip()
+# Field, Source, Center Data header (aliases), Source header (aliases), Kind(num/pct/text)
+# Aliases: , ya | se alag karo. TC / Day rows special hain.
+_ROWS = [
+    ["TC", "Center Data", "", "TC Code", ""], ["TC", "PM", "", "TC Code", ""], ["TC", "Calling", "", "TC Code", ""],
+    ["TC", "CSR", "", "TC Code", ""], ["TC", "Audit", "", "Venue Code | TC Code", ""], ["TC", "Audit Final", "", "TC_CODE | TC Code", ""],
+    ["Day", "Center Data", "", "Exam Day Number", ""],
+    ["Actual Cam", "PM", "Actual Camera", "Final Cam Count", "num"],
+    ["QC Cam", "PM", "QC Camera", "QC Cam Count", "num"],
+    ["Monitor", "PM", "Monitor Count", "Final Monitor Count", "num"],
+    ["UPS", "PM", "UPS Count", "Final UPS Count", "num"],
+    ["HMS %", "PM", "HMS%", "HMS Avg Hit Per%", "pct"],
+    ["DVR Installed", "PM", "Total DVR Count", "HMS DVR Installed Count", "num"],
+    ["DVR Live", "PM", "Online DVR Count", "HMS No of DVR Hit", "num"],
+    ["VOIP Status", "PM", "VOIP Status", "VOIP Final Installation Status", "text"],
+    ["Common Center", "PM", "Common Center", "Common Centers", "text"],
+    ["Manpower", "PM", "Manpower Attendance", "Manpower Attendence Days", "num"],
+    ["CCTV Installed", "Calling", "CCTV Installation Status", "CCTV Setup Installed", "text"],
+    ["ISP", "Calling", "Internet Installation Status", "Internet Installation", "text"],
+    ["Monitor Status", "Calling", "Monitor Installation Status", "Monitor Installed", "text"],
+    ["UPS Status", "Calling", "UPS.2", "UPS Installed", "text"],
+    ["Calling Status", "Calling", "Calling Status", "calling status", "text"],
+    ["Remarks", "Calling", "Remarks", "remarks", "text"],
+    ["Max Cam (Audit)", "Audit", "MAX Cam RCV as per Data", "As per Audit Max | Unnamed: 38", "num"],
+    ["Data %", "Audit", "Data %", "Data %", "pct"],
+    ["Audit %", "Audit", "Audit %", "Audit %", "pct"],
+    ["Audit Status", "Audit", "Audit Status", "Audit Status", "text"],
+    ["CSR Status", "CSR", "CSR Status", "CSR Received Status", "text"],
+    ["CSR Max Cam", "CSR", "CSR Camera/VOIP", "Working Cam Count S1 | Working Cam Count S2 | Working Cam Count S3 | Working Cam Count S4", "num"],
+    ["Rejected Param", "CSR", "Rejected Parameter", "Rejected Parameteres", "text"],
+    ["Rejected Remarks", "CSR", "Rejected Remarks", "Remarks", "text"],
+]
+DEFAULT_MAPPING = pd.DataFrame(_ROWS, columns=MAP_COLS)
 
-def clean_cols(df):
-    df.columns = [str(c) if str(c).startswith("Unnamed") else _c(c) for c in df.columns]
-    return df
-
-def load_sheet(x, cfg, project):
-    df = x.parse(cfg["sheet"], header=int(cfg.get("header", 0)))
-    df = clean_cols(df.rename(columns=cfg.get("rename") or {}))
-    p = cfg.get("project")
-    if project and p in df.columns: df = df[df[p].astype(str).str.strip() == project.strip()]
-    return df
+# CD column blank hona rule ke hisaab se theek hai: {CD field header: (CD status header, [keywords])}
+RULE_BLANK = {"CSR Camera/VOIP": ("CSR Status", ["rejected", "not rec"])}
 
 def tier(q):
     if pd.isna(q): return np.nan
@@ -62,52 +49,94 @@ def tier(q):
         if q >= lim: return v
     return 1.0 if q <= 0 else .50
 
-# Rule re-check. (label, Center Data column, function(day1_df) -> expected)
+# Rule re-check on day-1 rows. g(name) = numeric column, g(name, "text") = text column
+def _txt(g, n): return g(n, "text").str.lower()
 CHECKS = [
-    ("Cam not Received", "Camera not Received in Data", lambda d: (d["Ideal Cam"] - d["MAX Cam RCV as per Data"]).clip(lower=0)),
-    ("Not Rcv Deduction", "Not Received Camera Duduction", lambda d: (d["Ideal Cam"] - d["MAX Cam RCV as per Data"]).clip(lower=0) * d["Final Camera Rate"]),
-    ("Deduction %", "Deduction %", lambda d: d["Audit %"].map(tier)),
-    ("CSR Not Rcv", "CSR Not Recived", lambda d: np.where(d["CSR Status"].fillna("").str.lower().str.contains("not rec"), 1000, 0)),
-    ("CSR Rejected", "CSR Rejected Deduction", lambda d: np.where(d["CSR Status"].fillna("").str.lower().str.contains("rejected"), 500, 0)),
+    ("Cam not Received", "Camera not Received in Data", lambda g: (g("Ideal Cam") - g("MAX Cam RCV as per Data")).clip(lower=0)),
+    ("Not Rcv Deduction", "Not Received Camera Duduction", lambda g: (g("Ideal Cam") - g("MAX Cam RCV as per Data")).clip(lower=0) * g("Final Camera Rate")),
+    ("Deduction %", "Deduction %", lambda g: g("Audit %").map(tier)),
+    ("CSR Not Rcv", "CSR Not Recived", lambda g: _txt(g, "CSR Status").str.contains("not rec").astype(int) * 1000),
+    ("CSR Rejected", "CSR Rejected Deduction", lambda g: _txt(g, "CSR Status").str.contains("rejected").astype(int) * 500),
 ]
 
-def _join_uniq(s):
+def _c(s): return re.sub(r"\s+", " ", str(s).replace("\xa0", " ")).strip()
+def nk(s): return _c(s).lower()
+def split_alias(s):
+    if s is None or (isinstance(s, float) and np.isnan(s)): return []
+    return [a.strip() for a in re.split(r"[|;\n,]", str(s)) if a.strip()]
+
+def num(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)): return np.nan
+    if isinstance(v, (int, float, np.number)): return float(v)
+    t = str(v).strip().replace(",", "")
+    if t == "": return np.nan
+    pct = t.endswith("%"); t = t.rstrip("%")
+    try: x = float(t)
+    except ValueError: return np.nan
+    return x / 100 if pct else x
+
+def norm_tc(v):
+    if isinstance(v, (float, np.floating)) and not np.isnan(v) and float(v).is_integer(): return str(int(v))
+    return str(v).strip()
+
+def join_uniq(s):
     out = []
     for v in s.dropna():
         v = str(v).strip()
         if v and v not in out: out.append(v)
     return " | ".join(out) if out else np.nan
 
-def build_frames(x, cfg):
-    project = cfg.get("PROJECT", "")
-    cdc = cfg["CD"]
-    cd_all = load_sheet(x, cdc, project)
-    cd1 = cd_all.drop_duplicates(cdc["tc"]).set_index(cdc["tc"])
-    tcs = list(cd1.index)
-    src = {}; warns = []
-    for k, s in cfg["SRC"].items():
-        if not s.get("sheet") or s["sheet"] not in x.sheet_names: continue
-        d = load_sheet(x, s, project)
-        if s["tc"] not in d.columns:
-            warns.append(f"{k}: TC column {s['tc']!r} nahi mila. Available: {list(d.columns)[:30]}"); continue
-        src[k] = d[~d[s["tc"]].duplicated()].set_index(s["tc"])
-    cs = cfg.get("CSR")
-    if cs and cs.get("sheet") in x.sheet_names:
-        c = load_sheet(x, cs, project)
-        miss = [m for m in (cs["tc"], cs["status"], cs["param"], cs["remarks"]) if m not in c.columns]
-        if miss:
-            warns.append(f"CSR sheet me ye columns nahi mile: {miss}. Available: {list(c.columns)[:40]}")
-        else:
-            c = c[c[cs["tc"]].isin(tcs)].copy()
-            if cs.get("day") in c.columns:
-                c["_d"] = c[cs["day"]].astype(str).str.extract(r"(\d+)")[0].astype(float)
-                c = c.sort_values([cs["tc"], "_d"])
-            cams = [m for m in cs["cams"] if m in c.columns]
-            c["_w"] = c[cams].max(axis=1) if cams else np.nan
-            g = c.groupby(cs["tc"])
-            src["CSR"] = pd.DataFrame({"status": g[cs["status"]].apply(_join_uniq), "maxcam": g["_w"].max(),
-                                       "param": g[cs["param"]].apply(_join_uniq), "remarks": g[cs["remarks"]].apply(_join_uniq)})
-    return cd_all, cd1, tcs, src, warns
+def pick_tab(names, wanted):
+    nn = {nk(n): n for n in names}
+    for w in wanted:
+        if nk(w) in nn: return nn[nk(w)]
+    for w in wanted:
+        m = difflib.get_close_matches(nk(w), list(nn), n=1, cutoff=0.6)
+        if m: return nn[m[0]]
+    return None
+
+def frames_from_excel(xf, tabs=None):
+    frames, warns = {}, []
+    for k in SOURCES:
+        t = pick_tab(xf.sheet_names, [(tabs or {}).get(k)] if (tabs or {}).get(k) else DEFAULT_TABS[k])
+        if t is None: warns.append(f"{k}: tab nahi mila (available: {xf.sheet_names})"); continue
+        frames[k] = xf.parse(t, header=None)
+    return frames, warns
+
+def prep(raw, tc_aliases):
+    """Header row khud dhoondhta hai (TC column ke naam se), duplicate headers ko .1 .2 lagata hai."""
+    al = {nk(a) for a in tc_aliases}; h = None
+    for i in range(min(10, len(raw))):
+        if any(nk(v) in al for v in raw.iloc[i].tolist() if pd.notna(v)): h = i; break
+    if h is None: return None, None, f"TC column {tc_aliases} top 10 rows me nahi mila"
+    heads, seen = [], {}
+    for i, v in enumerate(raw.iloc[h].tolist()):
+        name = f"Unnamed: {i}" if (pd.isna(v) or str(v).strip() == "") else _c(v)
+        if name in seen: seen[name] += 1; name = f"{name}.{seen[name]}"
+        else: seen[name] = 0
+        heads.append(name)
+    df = raw.iloc[h + 1:].reset_index(drop=True); df.columns = heads
+    df = df.replace(r"^\s*$", np.nan, regex=True)
+    lk = {}
+    for c in df.columns: lk.setdefault(nk(c), c)
+    tc = next(lk[nk(a)] for a in tc_aliases if nk(a) in lk)
+    df = df[df[tc].notna()].copy(); df["__tc"] = df[tc].map(norm_tc)
+    return df, lk, None
+
+def field(df, lk, aliases, kind):
+    cols = list(dict.fromkeys(lk[nk(a)] for a in aliases if nk(a) in lk))
+    if not cols: return None
+    uniq = not df["__tc"].duplicated().any()
+    if kind in ("num", "pct"):
+        v = pd.concat([df[c].map(num) for c in cols], axis=1).max(axis=1)
+        s_ = pd.Series(v.values, index=df["__tc"].values)
+        return s_ if uniq else s_.groupby(level=0, sort=False).max()
+    v = df[cols].bfill(axis=1).iloc[:, 0]
+    if uniq:
+        return pd.Series(v.values, index=df["__tc"].values).map(lambda z: str(z).strip() if pd.notna(z) else np.nan)
+    d = pd.DataFrame({"t": df["__tc"].values, "v": v.values}).dropna()
+    d["v"] = d["v"].astype(str).str.strip(); d = d[d["v"] != ""].drop_duplicates()
+    return d.groupby("t", sort=False)["v"].agg(" | ".join)
 
 def gap(c, s, kind, tol):
     cb = pd.isna(c) or str(c).strip() == ""; sb = pd.isna(s) or str(s).strip() == ""
@@ -115,69 +144,126 @@ def gap(c, s, kind, tol):
     if cb: return "MISSING IN CD"
     if sb: return "SOURCE BLANK"
     if kind in ("num", "pct"):
-        try: return "OK" if abs(float(c) - float(s)) < (tol if kind == "pct" else 1e-4) else "MISMATCH"
-        except Exception: return "MISMATCH"
+        a, b = num(c), num(s)
+        if not (np.isnan(a) or np.isnan(b)): return "OK" if abs(a - b) < (tol if kind == "pct" else 1e-4) else "MISMATCH"
     return "OK" if str(c).strip().lower() == str(s).strip().lower() else "MISMATCH"
 
-def run(x, cfg):
-    cd_all, cd1, tcs, src, bw = build_frames(x, cfg)
-    tol = cfg.get("PCT_TOL", 0.006)
-    wide = pd.DataFrame(index=tcs); long_rows = []; summary = []; warns = list(bw)
-    for label, cdcol, sk, scol, kind in cfg["MAP"]:
-        cdcol, scol = _c(cdcol), _c(scol) if sk != "CSR" else scol
-        if cdcol not in cd1.columns: warns.append(f"Center Data me column nahi mila: {cdcol!r}"); continue
-        if sk not in src: warns.append(f"Source sheet '{sk}' load nahi hui"); continue
-        if scol not in src[sk].columns: warns.append(f"{sk} me column nahi mila: {scol!r}"); continue
-        cv = cd1[cdcol]; sv = src[sk][scol].reindex(tcs); ins = pd.Index(tcs).isin(src[sk].index)
-        gp = pd.Series([gap(cv[t], sv[t], kind, tol) if ins[i] else "NOT IN SOURCE" for i, t in enumerate(tcs)], index=tcs)
-        wide[f"{label} | CD"] = cv.values; wide[f"{label} | SRC"] = sv.values; wide[f"{label} | GAP"] = gp.values
-        summary.append(dict(Field=label, Source=f"{sk}: {scol}", **gp.value_counts().to_dict()))
-        for t in gp[gp != "OK"].index:
-            long_rows.append(dict(TC=t, Field=label, CenterData=cv[t], Source=sv[t], Gap=gp[t]))
-    if "Center Name" in cd1.columns: wide.insert(0, "Center Name", cd1["Center Name"].values)
+def run(frames, mapping, tol=0.006, auto=True):
+    warns = []
+    m = mapping.copy(); m.columns = [_c(c) for c in m.columns]
+    for c in MAP_COLS:
+        if c not in m.columns: m[c] = ""
+    m = m.fillna("").astype(str)
+    tcal = {k: ["TC Code"] for k in SOURCES}
+    for _, r in m[m["Field"].str.lower() == "tc"].iterrows():
+        if split_alias(r["Source header"]): tcal[r["Source"].strip()] = split_alias(r["Source header"])
+    dfs = {}
+    for k, raw in frames.items():
+        df, lk, err = prep(raw, tcal.get(k, ["TC Code"]))
+        if err: warns.append(f"{k}: {err}"); continue
+        dfs[k] = (df, lk)
+    if "Center Data" not in dfs: raise ValueError("Center Data load nahi hui: " + "; ".join(warns))
+    cd_df, cd_lk = dfs["Center Data"]
+    tcs = list(dict.fromkeys(cd_df["__tc"]))
+    if auto:
+        used = {nk(a) for _, r in m.iterrows() for a in split_alias(r["Center Data header"])}
+        am = auto_map(dfs, used, tcs, tol, skip={nk(a) for a in tcal.get('Center Data', [])} | {nk(a) for _, r in m[m['Field'].str.lower() == 'day'].iterrows() for a in split_alias(r['Source header'])})
+        if len(am): m = pd.concat([m, am.astype(str)], ignore_index=True)
+        if "How" not in m.columns: m["How"] = ""
+    wide = pd.DataFrame(index=tcs); long_rows = []; summary = []
+    for _, r in m.iterrows():
+        f, sk = r["Field"].strip(), r["Source"].strip()
+        if f.lower() in ("tc", "day", "") or not sk: continue
+        kind = (r["Kind"].strip().lower() or "text")
+        cd_al, s_al = split_alias(r["Center Data header"]), split_alias(r["Source header"])
+        cv = field(cd_df, cd_lk, cd_al, kind)
+        if cv is None: warns.append(f"[{f}] Center Data me header nahi mila: {cd_al}"); continue
+        if sk not in dfs: warns.append(f"[{f}] source '{sk}' load nahi hui"); continue
+        sdf, slk = dfs[sk]
+        sv = field(sdf, slk, s_al, kind)
+        if sv is None:
+            warns.append(f"[{f}] {sk} me header nahi mila: {s_al}. Available: {list(slk.values())[:40]}"); continue
+        cv = cv.reindex(tcs); sv = sv.reindex(tcs); ins = set(sdf["__tc"])
+        gp = [gap(cv[t], sv[t], kind, tol) if t in ins else "NOT IN SOURCE" for t in tcs]
+        rb = next((v for k_, v in RULE_BLANK.items() if nk(k_) == nk(cd_al[0])), None) if cd_al else None
+        if rb:
+            st_ = field(cd_df, cd_lk, [rb[0]], "text")
+            if st_ is not None:
+                st_ = st_.reindex(tcs).fillna("").str.lower()
+                gp = ["BLANK BY RULE" if g_ == "MISSING IN CD" and any(w in st_[t] for w in rb[1]) else g_ for g_, t in zip(gp, tcs)]
+        gp = pd.Series(gp, index=tcs)
+        wide[f"{f} | CD"] = cv.values; wide[f"{f} | SRC"] = sv.values; wide[f"{f} | GAP"] = gp.values
+        how = r.get("How", "") if "How" in r.index else ""
+        summary.append(dict(Field=f, Source=f"{sk}: {s_al[0] if s_al else ''}" + (f" [{how}]" if how and how != "nan" else ""), **gp.value_counts().to_dict()))
+        for t in gp[~gp.isin(["OK", "BLANK BY RULE"])].index:
+            long_rows.append(dict(TC=t, Field=f, CenterData=cv[t], Source=sv[t], Gap=gp[t]))
     wide.index.name = "TC Code"
     summ = pd.DataFrame(summary).fillna(0)
-    for k in ["OK", "MISMATCH", "MISSING IN CD", "SOURCE BLANK", "NOT IN SOURCE"]:
+    for k in ["OK", "MISMATCH", "MISSING IN CD", "SOURCE BLANK", "NOT IN SOURCE", "BLANK BY RULE"]:
         if k not in summ: summ[k] = 0
-    summ = summ[["Field", "Source", "OK", "MISMATCH", "MISSING IN CD", "SOURCE BLANK", "NOT IN SOURCE"]] if len(summ) else summ
+    summ = summ[["Field", "Source", "OK", "MISMATCH", "MISSING IN CD", "SOURCE BLANK", "NOT IN SOURCE", "BLANK BY RULE"]]
     gaps = pd.DataFrame(long_rows, columns=["TC", "Field", "CenterData", "Source", "Gap"])
-    # rule re-check
-    dc = cfg["CD"].get("day_col")
-    day1 = cd_all[cd_all[dc] == 1].set_index(cfg["CD"]["tc"]) if dc in cd_all.columns else cd1
+    # ---- rule re-check (day 1) ----
+    day_al = []
+    for _, r in m[m["Field"].str.lower() == "day"].iterrows(): day_al += split_alias(r["Source header"]) + split_alias(r["Center Data header"])
+    dcol = next((cd_lk[nk(a)] for a in day_al if nk(a) in cd_lk), None)
+    if dcol is None: warns.append("Day column nahi mila - rule check sab rows pe chala")
+    d1 = cd_df[cd_df[dcol].map(num) == 1] if dcol else cd_df
+    d1 = d1.drop_duplicates("__tc")
+    def g(name, kind="num"):
+        col = cd_lk.get(nk(name))
+        if col is None: raise KeyError(name)
+        s = d1[col]; s = s.map(num) if kind == "num" else s.fillna("").astype(str)
+        s.index = d1["__tc"].values
+        return s
     rr = []
     for label, col, fn in CHECKS:
-        if col not in day1.columns: continue
-        try: exp = pd.Series(fn(day1), index=day1.index)
-        except KeyError: continue
-        act = pd.to_numeric(day1[col], errors="coerce").fillna(0); exp = pd.to_numeric(exp, errors="coerce").fillna(0)
-        for t in day1.index[(act - exp).abs() > 0.01]:
+        try: exp = pd.to_numeric(fn(g), errors="coerce").fillna(0); act = g(col).fillna(0)
+        except KeyError as e: warns.append(f"Rule '{label}' skip: column nahi mila {e}"); continue
+        for t in act.index[(act - exp).abs() > 0.01]:
             rr.append(dict(TC=t, Rule=label, Column=col, CenterData=act[t], Expected=exp[t], Diff=round(act[t] - exp[t], 2)))
     rules = pd.DataFrame(rr, columns=["TC", "Rule", "Column", "CenterData", "Expected", "Diff"])
     return dict(summary=summ, gaps=gaps, rules=rules, compare=wide, warns=warns, n=len(tcs))
 
-def auto_detect(x, cfg, min_match=0.95, min_vals=30):
-    """Center Data ke har column ko har source column se value-match karke best mapping suggest karta hai."""
-    cd_all, cd1, tcs, src, _ = build_frames(x, cfg)
+def auto_map(dfs, used, tcs, tol=0.006, min_match=0.95, min_vals=30, skip=()):
+    """Mapping me jo Center Data columns nahi hain, unke liye source columns auto dhoondhta hai
+    (values >=95% match, ya same header naam + >=50% match)."""
+    cd_df, cd_lk = dfs["Center Data"]; cache = {}
+    def ser(key, col, kind):
+        ck = (key, col, kind)
+        if ck not in cache:
+            df, lk = dfs[key]; cache[ck] = field(df, lk, [col], kind)
+        return cache[ck]
     rows = []
-    def norm(s):
-        n = pd.to_numeric(s, errors="coerce")
-        return n.round(3) if n.notna().sum() >= s.notna().sum() * 0.9 and s.notna().any() else s.astype(str).str.strip().str.lower().where(s.notna())
-    for col in cd1.columns:
-        a = cd1[col]
-        if a.notna().sum() < min_vals or a.nunique() < 2: continue
-        na = norm(a); best = None
-        for sk, sdf in src.items():
-            for sc in sdf.columns:
-                b = sdf[sc].reindex(tcs)
-                if b.notna().sum() < min_vals: continue
-                nb = norm(b)
-                eq = ((na == nb) | (na.isna() & nb.isna())).mean()
-                sc_ = eq + 0.01 * difflib.SequenceMatcher(None, _c(col).lower(), _c(sc).lower()).ratio()
-                if eq >= min_match and (best is None or sc_ > best[3]): best = (eq, sk, sc, sc_)
-        if best:
-            kind = "pct" if "%" in col else ("num" if pd.to_numeric(a, errors="coerce").notna().sum() >= a.notna().sum() * 0.9 else "text")
-            rows.append([col, col, best[1], best[2], kind, round(best[0] * 100, 1)])
-    return pd.DataFrame(rows, columns=["Label", "CD column", "Source", "Source column", "Kind", "Match %"])
+    for col in list(cd_lk.values()):
+        if nk(col) in used or nk(col) in skip or col == "__tc" or col.startswith("Unnamed"): continue
+        raw = cd_df[col]; nn_ = raw.notna().sum()
+        if nn_ < min_vals: continue
+        kind = "pct" if "%" in col else ("num" if raw.map(num).notna().sum() >= 0.9 * nn_ else "text")
+        a = ser("Center Data", col, kind)
+        if a is None: continue
+        a = a.reindex(tcs)
+        if a.nunique() < 2: continue
+        best = None
+        for key, (sdf, slk) in dfs.items():
+            if key == "Center Data": continue
+            for sc in slk.values():
+                if sc == "__tc": continue
+                b = ser(key, sc, kind)
+                if b is None: continue
+                b = b.reindex(tcs)
+                if b.notna().sum() < min_vals or b.nunique() < 2: continue
+                if kind in ("num", "pct"):
+                    av, bv = a.values.astype(float), b.values.astype(float)
+                    eq = float(np.mean((np.isnan(av) & np.isnan(bv)) | (np.abs(av - bv) < (tol if kind == "pct" else 1e-4))))
+                else:
+                    eq = float(np.mean((a.fillna("").str.lower() == b.fillna("").str.lower()).values))
+                ns = difflib.SequenceMatcher(None, nk(col), nk(sc)).ratio()
+                if (eq >= min_match and ns >= 0.5) or (ns == 1 and eq >= 0.5):
+                    sc_ = eq + 0.01 * ns
+                    if best is None or sc_ > best[0]: best = (sc_, key, sc, eq)
+        if best: rows.append([col, best[1], col, best[2], kind, f"auto {best[3]*100:.0f}% match"])
+    return pd.DataFrame(rows, columns=MAP_COLS + ["How"])
 
 def to_excel_bytes(res):
     bio = io.BytesIO()
@@ -189,7 +275,7 @@ def to_excel_bytes(res):
         red, amb, grn = (PatternFill("solid", start_color=h) for h in ("F8CBAD", "FFE699", "C6E0B4"))
         for row in w.sheets["Compare"].iter_rows(min_row=2):
             for cell in row:
-                if cell.value == "OK": cell.fill = grn
+                if cell.value in ("OK", "BLANK BY RULE"): cell.fill = grn
                 elif cell.value in ("MISMATCH", "MISSING IN CD"): cell.fill = red
                 elif cell.value in ("SOURCE BLANK", "NOT IN SOURCE"): cell.fill = amb
         for sh in w.sheets.values():
@@ -197,4 +283,3 @@ def to_excel_bytes(res):
             for col in sh.columns: sh.column_dimensions[col[0].column_letter].width = 16
             for cell in sh[1]: cell.font = Font(bold=True)
     return bio.getvalue()
-    
