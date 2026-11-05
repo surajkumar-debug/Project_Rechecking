@@ -19,16 +19,15 @@ def tab_df(sid, tab, key): return gsheet.get_tab(sid, tab, key)
 def xl(b): return pd.ExcelFile(io.BytesIO(b))
 
 def read_mapping(sid, names, key):
-    """Control sheet ke 'Mapping' tab me hamare format ke columns hon to wahi use hota hai, warna default."""
+    """Control sheet ke 'Mapping' tab se mapping padhta hai. Header row pehli 15 rows me kahin bhi ho sakti hai,
+    column ke naam flexible hain. Returns (mapping_df, status_text, raw_df)."""
     t = core.pick_tab(names, ["Mapping"])
-    if t:
-        raw = tab_df(sid, t, key)
-        if not raw.empty:
-            hdr = [str(c).strip() for c in raw.iloc[0]]
-            if {"Field", "Source", "Center Data header", "Source header"} <= set(hdr):
-                m = raw.iloc[1:].reset_index(drop=True); m.columns = hdr
-                return m.dropna(how="all"), True
-    return core.DEFAULT_MAPPING.copy(), False
+    if not t: return core.DEFAULT_MAPPING.copy(), "Sheet me 'Mapping' naam ka tab nahi mila - default mapping use ho rahi hai", None
+    raw = tab_df(sid, t, key)
+    if raw.empty: return core.DEFAULT_MAPPING.copy(), f"'{t}' tab khaali hai - default mapping use ho rahi hai", raw
+    m = core.parse_mapping(raw)
+    if m is None: return core.DEFAULT_MAPPING.copy(), f"'{t}' tab ke headers samajh nahi aaye - default mapping use ho rahi hai", raw
+    return m, f"Mapping: Google Sheet ke '{t}' tab se ({len(m)} rows)", raw
 
 with st.sidebar:
     mode = st.radio("Data kahan se?", ["Control Google Sheet", "Excel upload"])
@@ -43,6 +42,9 @@ if mode == "Control Google Sheet":
     url = st.text_input("Control sheet link ya Apps Script Web App URL (/exec)", secret("control_url"))
     key = st.text_input("Google API key ya Apps Script TOKEN", secret("api_key"), type="password")
     if not url or not key: st.info("Web App URL + TOKEN (ya Sheet link + API key) daalo."); st.stop()
+    key = key.strip(); url = url.strip()
+    if key.lower().startswith("http"):
+        st.error("Neeche wali box me link nahi, sirf TOKEN daalo (wahi text jo Apps Script me `const TOKEN = '...'` me likha hai)."); st.stop()
     sid = gsheet.sheet_id(url)
     try: names = tabs_of(sid, key)
     except Exception as e: st.error(str(e)); st.stop()
@@ -51,8 +53,11 @@ if mode == "Control Google Sheet":
     for c, k in zip(cols, core.SOURCES):
         d = core.pick_tab(names, core.DEFAULT_TABS[k])
         chosen[k] = c.selectbox(k, names, index=names.index(d) if d in names else 0, key=f"tab_{k}")
-    mapping, custom = read_mapping(sid, names, key)
-    st.caption("Mapping: Control sheet ke 'Mapping' tab se" if custom else "Mapping: default (Mapping tab hamare format me nahi mila)")
+    mapping, status, mraw = read_mapping(sid, names, key)
+    if status.startswith("Mapping:"): st.success(status)
+    else:
+        st.warning(status + ". Mapping tab me ye columns chahiye: Field, Source, Center Data header, Source header, Kind (Kind optional).")
+        if mraw is not None and not mraw.empty: st.caption("Mapping tab me jo mila (pehli rows):"); st.dataframe(mraw.head(8), width="stretch")
     label = sid[:6]
     def load():
         fr = {k: tab_df(sid, t, key) for k, t in chosen.items()}
@@ -66,9 +71,8 @@ else:
     load = lambda: core.frames_from_excel(xl(up.getvalue()))
 
 with st.expander("Mapping (Field -> header aliases)"):
-    st.caption("Header ke naam se match hota hai, position se nahi. Ek field ke multiple naam | se alag karo.")
-    mapping = st.data_editor(mapping, num_rows="dynamic", width="stretch", key="map")
-    st.download_button("Mapping CSV download", mapping.to_csv(index=False), "mapping.csv")
+    st.caption("Ye Google Sheet ke Mapping tab ka live view hai. Permanent badlav sheet me karo (phir sidebar me refresh dabao); yahan ka edit sirf is run ke liye hai.")
+    mapping = st.data_editor(mapping, num_rows="dynamic", width="stretch", key=f"map_{label}")
 
 if st.button("Recheck chalao", type="primary"):
     with st.spinner("Tabs padh ke compare ho raha hai (auto-match me ~30 sec lag sakte hain)..."):

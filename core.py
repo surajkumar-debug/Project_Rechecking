@@ -59,6 +59,44 @@ CHECKS = [
     ("CSR Rejected", "CSR Rejected Deduction", lambda g: _txt(g, "CSR Status").str.contains("rejected").astype(int) * 500),
 ]
 
+_MAP_ALIASES = {
+    "Field": ["field", "field name", "parameter", "name", "column name"],
+    "Source": ["source", "source tab", "source sheet", "tab", "sheet", "source name"],
+    "Center Data header": ["center data header", "centre data header", "center data column", "centre data column", "cd header", "cd column", "cd", "center data", "center header"],
+    "Source header": ["source header", "source column", "source col", "src header", "src column", "source heading"],
+    "Kind": ["kind", "type", "data type", "compare type"],
+}
+
+def canon_source(name):
+    """'PM Compile' / 'pm' / 'Calling Sheet' -> 'PM' / 'Calling' (SOURCES ke key)."""
+    n = nk(name)
+    if not n: return ""
+    for k in SOURCES:
+        if nk(k) == n: return k
+    for k, al in DEFAULT_TABS.items():
+        if n in [nk(a) for a in al]: return k
+    pool = {nk(a): k for k, al in DEFAULT_TABS.items() for a in al}
+    mt = difflib.get_close_matches(n, list(pool), n=1, cutoff=0.75)
+    return pool[mt[0]] if mt else str(name).strip()
+
+def parse_mapping(raw):
+    """Google Sheet ke Mapping tab (header=None frame) -> standard mapping DataFrame, ya None."""
+    for i in range(min(15, len(raw))):
+        hdr = [nk(v) if pd.notna(v) else "" for v in raw.iloc[i].tolist()]
+        pos = {}
+        for std, al in _MAP_ALIASES.items():
+            for j, h in enumerate(hdr):
+                if h in al and j not in pos.values(): pos[std] = j; break
+        if {"Source", "Source header"} <= set(pos) and ("Center Data header" in pos or "Field" in pos):
+            body = raw.iloc[i + 1:]
+            m = pd.DataFrame({std: (body.iloc[:, pos[std]].values if std in pos else [""] * len(body)) for std in MAP_COLS})
+            m = m.replace(r"^\s*$", np.nan, regex=True).dropna(how="all", subset=["Source", "Source header", "Center Data header", "Field"]).fillna("")
+            m = m.astype(str).apply(lambda c: c.map(_c))
+            if "Field" not in pos: m["Field"] = m["Center Data header"].where(m["Center Data header"] != "", m["Source header"])
+            m.loc[m["Field"] == "", "Field"] = m["Center Data header"]
+            return m.reset_index(drop=True)
+    return None
+
 def _c(s): return re.sub(r"\s+", " ", str(s).replace("\xa0", " ")).strip()
 def nk(s): return _c(s).lower()
 def split_alias(s):
@@ -160,6 +198,7 @@ def run(frames, mapping, tol=0.006, auto=True):
     for c in MAP_COLS:
         if c not in m.columns: m[c] = ""
     m = m.fillna("").astype(str)
+    m["Source"] = m["Source"].map(canon_source)
     tcal = {k: ["TC Code"] for k in SOURCES}
     for _, r in m[m["Field"].str.lower() == "tc"].iterrows():
         if split_alias(r["Source header"]): tcal[r["Source"].strip()] = split_alias(r["Source header"])
@@ -200,6 +239,7 @@ def run(frames, mapping, tol=0.006, auto=True):
         gp = pd.Series(gp, index=tcs)
         wide[f"{f} | CD"] = cv.values; wide[f"{f} | SRC"] = sv.values; wide[f"{f} | GAP"] = gp.values
         how = r.get("How", "") if "How" in r.index else ""
+        how = "" if (not isinstance(how, str) and pd.isna(how)) else str(how)
         summary.append(dict(Field=f, Source=f"{sk}: {s_al[0] if s_al else ''}" + (f" [{how}]" if how and how != "nan" else ""), **gp.value_counts().to_dict()))
         for t in gp[~gp.isin(["OK", "BLANK BY RULE"])].index:
             long_rows.append(dict(TC=t, Field=f, CenterData=cv[t], Source=sv[t], Gap=gp[t]))
@@ -214,6 +254,7 @@ def run(frames, mapping, tol=0.006, auto=True):
     # ---- rule re-check (day 1) ----
     day_al = []
     for _, r in m[m["Field"].str.lower() == "day"].iterrows(): day_al += split_alias(r["Source header"]) + split_alias(r["Center Data header"])
+    day_al += ["Exam Day Number", "Day", "Exam Day"]
     dcol = next((cd_lk[nk(a)] for a in day_al if nk(a) in cd_lk), None)
     if dcol is None: warns.append("Day column nahi mila - rule check sab rows pe chala")
     d1 = cd_df[cd_df[dcol].map(num) == 1] if dcol else cd_df
