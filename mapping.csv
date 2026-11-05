@@ -1,0 +1,32 @@
+Field,Source,Center Data header,Source header,Kind
+TC,Center Data,,TC Code,
+TC,PM,,TC Code,
+TC,Calling,,TC Code,
+TC,CSR,,TC Code,
+TC,Audit,,Venue Code | TC Code,
+TC,Audit Final,,TC_CODE | TC Code,
+Day,Center Data,,Exam Day Number,
+Actual Cam,PM,Actual Camera,Final Cam Count,num
+QC Cam,PM,QC Camera,QC Cam Count,num
+Monitor,PM,Monitor Count,Final Monitor Count,num
+UPS,PM,UPS Count,Final UPS Count,num
+HMS %,PM,HMS%,HMS Avg Hit Per%,pct
+DVR Installed,PM,Total DVR Count,HMS DVR Installed Count,num
+DVR Live,PM,Online DVR Count,HMS No of DVR Hit,num
+VOIP Status,PM,VOIP Status,VOIP Final Installation Status,text
+Common Center,PM,Common Center,Common Centers,text
+Manpower,PM,Manpower Attendance,Manpower Attendence Days,num
+CCTV Installed,Calling,CCTV Installation Status,CCTV Setup Installed,text
+ISP,Calling,Internet Installation Status,Internet Installation,text
+Monitor Status,Calling,Monitor Installation Status,Monitor Installed,text
+UPS Status,Calling,UPS.2,UPS Installed,text
+Calling Status,Calling,Calling Status,calling status,text
+Remarks,Calling,Remarks,remarks,text
+Max Cam (Audit),Audit,MAX Cam RCV as per Data,As per Audit Max | Unnamed: 38,num
+Data %,Audit,Data %,Data %,pct
+Audit %,Audit,Audit %,Audit %,pct
+Audit Status,Audit,Audit Status,Audit Status,text
+CSR Status,CSR,CSR Status,CSR Received Status,text
+CSR Max Cam,CSR,CSR Camera/VOIP,Working Cam Count S1 | Working Cam Count S2 | Working Cam Count S3 | Working Cam Count S4,num
+Rejected Param,CSR,Rejected Parameter,Rejected Parameteres,text
+Rejected Remarks,CSR,Rejected Remarks,Remarks,text
