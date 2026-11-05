@@ -1,42 +1,70 @@
-import re, requests, numpy as np, pandas as pd
+import re
+import numpy as np, pandas as pd, requests
 from urllib.parse import quote
 
-BASE = "https://docs.google.com/spreadsheets/d/15F6b335mhVtCJveSHEAOHHpsEXaVPqV_NVKsMLFFNpo/edit?gid=1827221759#gid=1827221759"
+API = "https://sheets.googleapis.com/v4/spreadsheets"
+
 
 def sheet_id(url):
-    m = re.search(r"/d/([\w-]+)", url or "")
-    return m.group(1) if m else (url or "").strip()
+    """Extract the spreadsheet ID from a Google Sheet link (or an ID). Apps Script URLs are returned unchanged."""
+    url = (url or "").strip()
+    if "script.google.com" in url:
+        return url
+    m = re.search(r"/d/([\w-]+)", url)
+    return m.group(1) if m else url
+
+
+def is_script(src):
+    return "script.google.com" in (src or "")
+
 
 def _get(url, params):
-    r = requests.get(url, params=params, timeout=120)
+    try:
+        r = requests.get(url, params=params, timeout=120)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Network error: {e}")
     if r.status_code != 200:
-        try: msg = r.json()["error"]["message"]
-        except Exception: msg = r.text[:200]
-        raise RuntimeError(f"Google API {r.status_code}: {msg}")
-    try: return r.json()
-    except Exception: raise RuntimeError("Link se JSON nahi aaya - Web App access 'Anyone' hai? URL /exec pe khatam hota hai?")
+        try:
+            msg = r.json()["error"]["message"]
+        except Exception:
+            msg = r.text[:200]
+        hint = ""
+        if r.status_code in (403, 404):
+            hint = " | Share the sheet as 'Anyone with the link: Viewer' and use an API key with the Google Sheets API enabled, or use the Apps Script Web App."
+        if r.status_code == 400 and "API key" in msg:
+            hint = " | The API key is invalid."
+        raise RuntimeError(f"Google API {r.status_code}: {msg}{hint}")
+    try:
+        return r.json()
+    except Exception:
+        raise RuntimeError("The URL did not return JSON. Check that the Web App access is set to 'Anyone', the URL ends with /exec, and a new version was deployed after the last code change.")
 
-def is_script(src): return "script.google.com" in (src or "")
 
 def _script(src, token, **kw):
     j = _get(src.strip(), {"token": token, **kw})
-    if isinstance(j, dict) and j.get("error"): raise RuntimeError("Apps Script: " + str(j["error"]))
+    if isinstance(j, dict) and j.get("error"):
+        raise RuntimeError("Apps Script: " + str(j["error"]))
     return j
 
+
+def _frame(vals):
+    if not vals:
+        return pd.DataFrame()
+    w = max(len(r) for r in vals)
+    df = pd.DataFrame([list(r) + [""] * (w - len(r)) for r in vals], dtype=object)
+    return df.replace("", np.nan)
+
+
 def list_tabs(sid, key):
-    if is_script(sid): return _script(sid, key, action="tabs")["tabs"]
-    j = _get(f"{BASE}/{sid}", {"fields": "sheets.properties.title", "key": key})
+    if is_script(sid):
+        return _script(sid, key, action="tabs")["tabs"]
+    j = _get(f"{API}/{sid}", {"fields": "sheets.properties.title", "key": key})
     return [s["properties"]["title"] for s in j.get("sheets", [])]
+
 
 def get_tab(sid, tab, key):
     if is_script(sid):
-        vals = _script(sid, key, action="tab", name=tab).get("values", [])
-        if not vals: return pd.DataFrame()
-        w = max(len(r) for r in vals)
-        return pd.DataFrame([r + [""] * (w - len(r)) for r in vals]).replace("", np.nan)
+        return _frame(_script(sid, key, action="tab", name=tab).get("values", []))
     rng = quote("'" + tab.replace("'", "''") + "'", safe="")
-    j = _get(f"{BASE}/{sid}/values/{rng}", {"valueRenderOption": "UNFORMATTED_VALUE", "key": key})
-    vals = j.get("values", [])
-    if not vals: return pd.DataFrame()
-    w = max(len(r) for r in vals)
-    return pd.DataFrame([r + [""] * (w - len(r)) for r in vals]).replace("", np.nan)
+    j = _get(f"{API}/{sid}/values/{rng}", {"valueRenderOption": "UNFORMATTED_VALUE", "key": key})
+    return _frame(j.get("values", []))
