@@ -105,12 +105,16 @@ if res:
     m1.metric("Centers", res["n"]); m2.metric("Gap cells", len(res["gaps"])); m3.metric("Rule errors", len(res["rules"]))
     m4.metric("Clean fields", int(((s["OK"] + s["BLANK BY RULE"]) == res["n"]).sum()))
     st.download_button("Excel download", core.to_excel_bytes(res), f"Recheck_{st.session_state['label']}.xlsx", type="primary")
-    t1, t2, t3, t4 = st.tabs(["Summary", "Gaps (center-wise)", "Rule errors", "Full compare"])
+    t1, t2, t3, t5, t4 = st.tabs(["Summary", "Gaps (center-wise)", "Rule errors", "Foldering (No)", "Full compare"])
     with t1: st.dataframe(s, width="stretch", hide_index=True, height=35 * (len(s) + 1) + 3)
     with t2:
         f = st.multiselect("Field filter", sorted(res["gaps"]["Field"].unique()))
         st.dataframe(res["gaps"][res["gaps"]["Field"].isin(f)] if f else res["gaps"], width="stretch", hide_index=True, height=520)
     with t3: st.dataframe(res["rules"], width="stretch", hide_index=True, height=520)
+    with t5:
+        fd = res.get("foldering")
+        if fd is None or fd.empty: st.info("Foldering me koi 'No' center nahi mila (ya Foldering column detect nahi hua - upar warning dekho).")
+        else: st.caption(f"{len(fd)} centers jinka Folder Status 'No' hai (Audit Final ya Center Data me). Gap column dikhata hai ki dono me match hai ya nahi."); st.dataframe(fd, width="stretch", hide_index=True, height=520)
     with t4: st.dataframe(res["compare"], width="stretch", height=520)
 
 st.markdown("<div style='height:80px'></div>", unsafe_allow_html=True)
