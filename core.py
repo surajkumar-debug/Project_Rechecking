@@ -2,9 +2,9 @@ import io, re, difflib
 import numpy as np, pandas as pd
 from openpyxl.styles import PatternFill, Font
 
-SOURCES = ["Center Data", "PM", "Calling", "CSR", "Audit", "Audit Final"]
+SOURCES = ["Center Data", "PM", "Calling", "CSR", "Audit", "Audit Final", "Duplicate"]
 DEFAULT_TABS = {"Center Data": ["Center Data"], "PM": ["PM Compile", "PM"], "Calling": ["Calling Sheet", "Calling"],
-                "CSR": ["CSR Audit", "CSR"], "Audit": ["Audit Home", "Audit"], "Audit Final": ["Audit Final"]}
+                "CSR": ["CSR Audit", "CSR"], "Audit": ["Audit Home", "Audit"], "Audit Final": ["Audit Final"], "Duplicate": ["Duplicate Cam", "Duplicate"]}
 MAP_COLS = ["Field", "Source", "Center Data header", "Source header", "Kind"]
 
 # Field, Source, Center Data header (aliases), Source header (aliases), Kind(num/pct/text)
@@ -221,6 +221,18 @@ def run(frames, mapping, tol=0.006, auto=True):
     if "Center Data" not in dfs: raise ValueError("Center Data load nahi hui: " + "; ".join(warns))
     cd_df, cd_lk = dfs["Center Data"]
     tcs = list(dict.fromkeys(cd_df["__tc"]))
+    # ---- Foldering: Audit Final ka folder status vs Center Data ----
+    if not any("folder" in nk(f) for f in m["Field"]):
+        def _fcol(lk):
+            ks = [k for k in lk if "folder" in k]
+            ks.sort(key=lambda k: (0 if "status" in k else 1, len(k)))
+            return lk[ks[0]] if ks else None
+        if "Audit Final" not in dfs: warns.append("Foldering skip: Audit Final tab load nahi hui")
+        else:
+            sc_, cc_ = _fcol(dfs["Audit Final"][1]), _fcol(cd_lk)
+            if sc_ and cc_: m = pd.concat([m, pd.DataFrame([["Foldering", "Audit Final", cc_, sc_, "text"]], columns=MAP_COLS)], ignore_index=True)
+            elif not sc_: warns.append("Foldering skip: Audit Final me 'folder' naam ka column nahi mila (Mapping tab me row daalo)")
+            else: warns.append(f"Foldering skip: Center Data me 'folder' naam ka column nahi mila (Audit Final: {sc_})")
     if auto:
         used = {nk(a) for _, r in m.iterrows() for a in split_alias(r["Center Data header"])}
         am = auto_map(dfs, used, tcs, tol, skip={nk(a) for a in tcal.get('Center Data', [])} | {nk(a) for _, r in m[m['Field'].str.lower() == 'day'].iterrows() for a in split_alias(r['Source header'])})
@@ -283,7 +295,14 @@ def run(frames, mapping, tol=0.006, auto=True):
         for t in act.index[(act - exp).abs() > 0.01]:
             rr.append(dict(TC=t, Rule=label, Column=col, CenterData=act[t], Expected=exp[t], Diff=round(act[t] - exp[t], 2)))
     rules = pd.DataFrame(rr, columns=["TC", "Rule", "Column", "CenterData", "Expected", "Diff"])
-    return dict(summary=summ, gaps=gaps, rules=rules, compare=wide, warns=warns, n=len(tcs))
+    fcols = sorted({c.rsplit(" | ", 1)[0] for c in wide.columns if "folder" in nk(c)})
+    fold = pd.DataFrame(columns=["TC", "Field", "Center Data", "Audit Final", "Gap"])
+    if fcols:
+        f0 = fcols[0]; cdv, srv, gpv = wide[f0 + " | CD"], wide[f0 + " | SRC"], wide[f0 + " | GAP"]
+        isno = lambda v: txt(v).startswith("no") or txt(v) in ("n", "pending", "not done")
+        sel = [t for t in wide.index if isno(srv[t]) or isno(cdv[t])]
+        fold = pd.DataFrame({"TC": sel, "Field": f0, "Center Data": [cdv[t] for t in sel], "Audit Final": [srv[t] for t in sel], "Gap": [gpv[t] for t in sel]})
+    return dict(summary=summ, gaps=gaps, rules=rules, compare=wide, foldering=fold, warns=warns, n=len(tcs))
 
 def auto_map(dfs, used, tcs, tol=0.006, min_match=0.95, min_vals=30, skip=()):
     """Mapping me jo Center Data columns nahi hain, unke liye source columns auto dhoondhta hai
@@ -331,6 +350,7 @@ def to_excel_bytes(res):
         res["summary"].to_excel(w, sheet_name="Summary", index=False)
         res["gaps"].to_excel(w, sheet_name="Gaps_Only", index=False)
         res["rules"].to_excel(w, sheet_name="Rule_Errors", index=False)
+        if "foldering" in res: res["foldering"].to_excel(w, sheet_name="Foldering_No", index=False)
         res["compare"].to_excel(w, sheet_name="Compare")
         red, amb, grn = (PatternFill("solid", start_color=h) for h in ("F8CBAD", "FFE699", "C6E0B4"))
         for row in w.sheets["Compare"].iter_rows(min_row=2):
