@@ -1,0 +1,42 @@
+import re, requests, numpy as np, pandas as pd
+from urllib.parse import quote
+
+BASE = "https://sheets.googleapis.com/v4/spreadsheets"
+
+def sheet_id(url):
+    m = re.search(r"/d/([\w-]+)", url or "")
+    return m.group(1) if m else (url or "").strip()
+
+def _get(url, params):
+    r = requests.get(url, params=params, timeout=120)
+    if r.status_code != 200:
+        try: msg = r.json()["error"]["message"]
+        except Exception: msg = r.text[:200]
+        raise RuntimeError(f"Google API {r.status_code}: {msg}")
+    try: return r.json()
+    except Exception: raise RuntimeError("Link se JSON nahi aaya - Web App access 'Anyone' hai? URL /exec pe khatam hota hai?")
+
+def is_script(src): return "script.google.com" in (src or "")
+
+def _script(src, token, **kw):
+    j = _get(src.strip(), {"token": token, **kw})
+    if isinstance(j, dict) and j.get("error"): raise RuntimeError("Apps Script: " + str(j["error"]))
+    return j
+
+def list_tabs(sid, key):
+    if is_script(sid): return _script(sid, key, action="tabs")["tabs"]
+    j = _get(f"{BASE}/{sid}", {"fields": "sheets.properties.title", "key": key})
+    return [s["properties"]["title"] for s in j.get("sheets", [])]
+
+def get_tab(sid, tab, key):
+    if is_script(sid):
+        vals = _script(sid, key, action="tab", name=tab).get("values", [])
+        if not vals: return pd.DataFrame()
+        w = max(len(r) for r in vals)
+        return pd.DataFrame([r + [""] * (w - len(r)) for r in vals]).replace("", np.nan)
+    rng = quote("'" + tab.replace("'", "''") + "'", safe="")
+    j = _get(f"{BASE}/{sid}/values/{rng}", {"valueRenderOption": "UNFORMATTED_VALUE", "key": key})
+    vals = j.get("values", [])
+    if not vals: return pd.DataFrame()
+    w = max(len(r) for r in vals)
+    return pd.DataFrame([r + [""] * (w - len(r)) for r in vals]).replace("", np.nan)
