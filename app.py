@@ -6,7 +6,7 @@ st.set_page_config(page_title="Center Data Recheck", layout="wide")
 st.markdown("""
 <style>
 header[data-testid="stHeader"] {background: transparent; height: 2.5rem;}
-div[data-testid="stMainBlockContainer"], .block-container {padding-top: 1rem !important; padding-bottom: 2rem !important;}
+div[data-testid="stMainBlockContainer"], .block-container {padding-top: 1rem !important; padding-bottom: 7rem !important;}
 html, body, [data-testid="stAppViewContainer"], section.main {overflow-anchor: none;}
 h1.portal-title {font-size: 1.9rem; font-weight: 700; margin: 0 0 .6rem 0; padding: 0;}
 </style>
@@ -106,9 +106,11 @@ if res:
     m4.metric("Clean fields", int(((s["OK"] + s["BLANK BY RULE"]) == res["n"]).sum()))
     st.download_button("Excel download", core.to_excel_bytes(res), f"Recheck_{st.session_state['label']}.xlsx", type="primary")
     t1, t2, t3, t4 = st.tabs(["Summary", "Gaps (center-wise)", "Rule errors", "Full compare"])
-    with t1: st.dataframe(s, width="stretch", hide_index=True, height=min(620, 38 + 35 * len(s)))
+    with t1: st.dataframe(s, width="stretch", hide_index=True, height=35 * (len(s) + 1) + 3)
     with t2:
         f = st.multiselect("Field filter", sorted(res["gaps"]["Field"].unique()))
         st.dataframe(res["gaps"][res["gaps"]["Field"].isin(f)] if f else res["gaps"], width="stretch", hide_index=True, height=520)
     with t3: st.dataframe(res["rules"], width="stretch", hide_index=True, height=520)
     with t4: st.dataframe(res["compare"], width="stretch", height=520)
+
+st.markdown("<div style='height:80px'></div>", unsafe_allow_html=True)
