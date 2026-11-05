@@ -38,9 +38,9 @@ with st.sidebar:
 frames, load_warns, mapping, label = {}, [], None, "project"
 
 if mode == "Control Google Sheet":
-    url = st.text_input("Control sheet link", secret("control_url"))
-    key = st.text_input("Google API key", secret("api_key"), type="password")
-    if not url or not key: st.info("Control sheet ka link aur API key daalo."); st.stop()
+    url = st.text_input("Control sheet link ya Apps Script Web App URL (/exec)", secret("control_url"))
+    key = st.text_input("Google API key ya Apps Script TOKEN", secret("api_key"), type="password")
+    if not url or not key: st.info("Web App URL + TOKEN (ya Sheet link + API key) daalo."); st.stop()
     sid = gsheet.sheet_id(url)
     try: names = tabs_of(sid, key)
     except Exception as e: st.error(str(e)); st.stop()
