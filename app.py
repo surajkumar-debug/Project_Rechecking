@@ -78,14 +78,19 @@ if mode == "Control Google Sheet":
     label = sid[:6]
     def load():
         fr = {k: tab_df(sid, t, key) for k, t in chosen.items()}
-        return fr, [f"{k}: tab is empty" for k, v in fr.items() if v.empty]
+        w = []
+        for e in core.extra_sources(mapping):          # any additional tab named in the Mapping
+            t = core.pick_tab(names, [e], 0.85)
+            if t: fr[e] = tab_df(sid, t, key)
+            else: w.append(f"{e}: tab not found in the Google Sheet")
+        return fr, w + [f"{k}: tab is empty" for k, v in fr.items() if v.empty]
 else:
     up = st.sidebar.file_uploader("Project Excel (.xlsx)", type=["xlsx"])
     mup = st.sidebar.file_uploader("Mapping (.csv) - optional", type=["csv"])
     if not up: st.info("Upload the project Excel file from the sidebar."); st.stop()
     mapping = pd.read_csv(mup) if mup else core.DEFAULT_MAPPING.copy()
     label = up.name.rsplit(".", 1)[0]
-    load = lambda: core.frames_from_excel(xl(up.getvalue()))
+    load = lambda: core.frames_from_excel(xl(up.getvalue()), extras=core.extra_sources(mapping))
     with st.expander("Advanced settings: mapping", expanded=False):
         mapping = st.data_editor(mapping, num_rows="dynamic", width="stretch", key=f"map_{label}")
 
@@ -160,13 +165,13 @@ if res:
 
     with t5:
         fd = res.get("foldering")
-        if fd is None or fd.empty: st.info("No centers with Folder Status 'No' were found, or the foldering column could not be detected. Please check the warnings above.")
+        if fd is None or fd.empty: st.info("No foldering records were found, or the foldering columns could not be detected. Please check the warnings above.")
         else:
-            st.caption(f"{len(fd)} centers with Folder Status 'No' (in Audit Final or Center Data). The Gap column shows whether both sources agree.")
+            st.caption(f"{len(fd)} centers listed (Folder Status 'No' in Audit Final, or a foldering entry present in Center Data). Check = result of the rule: the center code and deduction must appear in Center Data only where the status is 'No'.")
             c1, c2 = st.columns([2, 2])
-            f_gap = c1.multiselect("Gap", sorted(fd["Gap"].unique()), key="f_f_gap")
+            f_gap = c1.multiselect("Check result", sorted(fd["Check"].unique()), key="f_f_gap")
             f_tc = c2.text_input("Search TC code (comma separated)", key="f_f_tc")
-            fv = fd[fd["Gap"].isin(f_gap)] if f_gap else fd
+            fv = fd[fd["Check"].isin(f_gap)] if f_gap else fd
             fv = fv[tc_match(fv["TC"], f_tc)]
             st.dataframe(fv, width="stretch", hide_index=True, height=520)
             csv_btn(fv, "foldering_filtered", "dl_fold")
