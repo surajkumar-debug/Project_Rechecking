@@ -76,7 +76,7 @@ def canon_source(name):
     for k, al in DEFAULT_TABS.items():
         if n in [nk(a) for a in al]: return k
     pool = {nk(a): k for k, al in DEFAULT_TABS.items() for a in al}
-    mt = difflib.get_close_matches(n, list(pool), n=1, cutoff=0.75)
+    mt = difflib.get_close_matches(n, list(pool), n=1, cutoff=0.9)
     return pool[mt[0]] if mt else str(name).strip()
 
 def parse_mapping(raw):
@@ -141,21 +141,33 @@ def join_uniq(s):
         if v and v not in out: out.append(v)
     return " | ".join(out) if out else np.nan
 
-def pick_tab(names, wanted):
+def pick_tab(names, wanted, cutoff=0.6):
     nn = {nk(n): n for n in names}
     for w in wanted:
         if nk(w) in nn: return nn[nk(w)]
     for w in wanted:
-        m = difflib.get_close_matches(nk(w), list(nn), n=1, cutoff=0.6)
+        m = difflib.get_close_matches(nk(w), list(nn), n=1, cutoff=cutoff)
         if m: return nn[m[0]]
     return None
 
-def frames_from_excel(xf, tabs=None):
+def extra_sources(mapping):
+    """Source names used in the Mapping that are not built-in sources. They are loaded as additional tabs."""
+    out = []
+    for v in mapping["Source"].tolist() if "Source" in mapping.columns else []:
+        c = canon_source(v) if pd.notna(v) else ""
+        if c and c not in SOURCES and c not in out: out.append(c)
+    return out
+
+def frames_from_excel(xf, tabs=None, extras=()):
     frames, warns = {}, []
     for k in SOURCES:
         t = pick_tab(xf.sheet_names, [(tabs or {}).get(k)] if (tabs or {}).get(k) else DEFAULT_TABS[k])
         if t is None: warns.append(f"{k}: tab not found (available: {xf.sheet_names})"); continue
         frames[k] = xf.parse(t, header=None)
+    for e in extras:
+        t = pick_tab(xf.sheet_names, [e], 0.85)
+        if t is None: warns.append(f"{e}: tab not found (available: {xf.sheet_names})"); continue
+        frames[e] = xf.parse(t, header=None)
     return frames, warns
 
 def prep(raw, tc_aliases):
@@ -203,6 +215,46 @@ def gap(c, s, kind, tol):
         if not (np.isnan(a) or np.isnan(b)): return "OK" if abs(a - b) < (tol if kind == "pct" else 1e-4) else "MISMATCH"
     return "OK" if txt(c) == txt(s) else "MISMATCH"
 
+def foldering_check(dfs, cd_df, cd_lk, tcs, warns):
+    """Foldering rule: Audit Final holds a Yes/No folder status per center. In Center Data the center code
+    (and its deduction) must appear ONLY on rows where the status is 'No'.
+    Returns a DataFrame with one row per center plus the Check result."""
+    cols = ["TC", "Audit Final Status", "Center Data Code", "Center Data Deduction", "Check"]
+    if "Audit Final" not in dfs: warns.append("Foldering check skipped: the Audit Final tab could not be loaded"); return pd.DataFrame(columns=cols)
+    af_df, af_lk = dfs["Audit Final"]
+    af_ks = sorted([k for k in af_lk if "folder" in k], key=lambda k: (0 if "status" in k else 1, len(k)))
+    if not af_ks: warns.append("Foldering check skipped: no column containing 'folder' was found in Audit Final"); return pd.DataFrame(columns=cols)
+    cd_cols = [cd_lk[k] for k in cd_lk if "folder" in k]
+    if not cd_cols: warns.append("Foldering check skipped: no column containing 'folder' was found in Center Data"); return pd.DataFrame(columns=cols)
+    ded_col = next((c for c in cd_cols if any(w in nk(c) for w in ("deduct", "amount", "penalt"))), None)
+    code_opts = [c for c in cd_cols if c != ded_col]
+    def code_ratio(c):
+        v = cd_df[cd_df[c].notna()]
+        return float((v[c].map(norm_tc) == v["__tc"]).mean()) if len(v) else 0.0
+    code_col = max(code_opts, key=code_ratio) if code_opts else None
+    status = field(af_df, af_lk, [af_lk[af_ks[0]]], "text")
+    code = field(cd_df, cd_lk, [code_col], "text") if code_col else None
+    ded = field(cd_df, cd_lk, [ded_col], "num") if ded_col else None
+    in_af = set(af_df["__tc"]); rows = []
+    for t in tcs:
+        stv = txt(status.get(t, "")) if status is not None else ""
+        cr = code.get(t, np.nan) if code is not None else np.nan
+        cv = "" if pd.isna(cr) else _c(cr)
+        dv = ded.get(t, np.nan) if ded is not None else np.nan
+        has_code = cv != ""; has_ded = (not pd.isna(dv)) and float(dv) > 0
+        is_no = stv.startswith("no") or stv in ("n", "not done")
+        code_ok = has_code and any(norm_tc(p) == t for p in cv.split("|"))
+        if t not in in_af: chk = "NOT IN SOURCE"
+        elif stv == "": chk = "SOURCE BLANK" if (has_code or has_ded) else "OK"
+        elif is_no:
+            if code_col and not has_code: chk = "MISSING IN CD"
+            elif code_col and not code_ok: chk = "CODE MISMATCH"
+            elif ded_col and not has_ded: chk = "DEDUCTION MISSING"
+            else: chk = "OK"
+        else: chk = "EXTRA IN CD" if (has_code or has_ded) else "OK"
+        rows.append([t, status.get(t, np.nan) if status is not None else np.nan, cv or np.nan, dv, chk])
+    return pd.DataFrame(rows, columns=cols)
+
 def run(frames, mapping, tol=0.006, auto=True):
     warns = []
     m = mapping.copy(); m.columns = [_c(c) for c in m.columns]
@@ -221,27 +273,15 @@ def run(frames, mapping, tol=0.006, auto=True):
     if "Center Data" not in dfs: raise ValueError("Center Data could not be loaded: " + "; ".join(warns))
     cd_df, cd_lk = dfs["Center Data"]
     tcs = list(dict.fromkeys(cd_df["__tc"]))
-    # ---- Foldering: Audit Final ka folder status vs Center Data ----
-    if not any("folder" in nk(f) for f in m["Field"]):
-        def _fcol(lk):
-            ks = [k for k in lk if "folder" in k]
-            ks.sort(key=lambda k: (0 if "status" in k else 1, len(k)))
-            return lk[ks[0]] if ks else None
-        if "Audit Final" not in dfs: warns.append("Foldering check skipped: the Audit Final tab could not be loaded")
-        else:
-            sc_, cc_ = _fcol(dfs["Audit Final"][1]), _fcol(cd_lk)
-            if sc_ and cc_: m = pd.concat([m, pd.DataFrame([["Foldering", "Audit Final", cc_, sc_, "text"]], columns=MAP_COLS)], ignore_index=True)
-            elif not sc_: warns.append("Foldering check skipped: no column containing 'folder' was found in Audit Final (add a Foldering row to the Mapping tab)")
-            else: warns.append(f"Foldering check skipped: no column containing 'folder' was found in Center Data (Audit Final column: {sc_})")
     if auto:
-        used = {nk(a) for _, r in m.iterrows() for a in split_alias(r["Center Data header"])}
+        used = {nk(a) for _, r in m.iterrows() for a in split_alias(r["Center Data header"])} | {k for k in cd_lk if "folder" in k}
         am = auto_map(dfs, used, tcs, tol, skip={nk(a) for a in tcal.get('Center Data', [])} | {nk(a) for _, r in m[m['Field'].str.lower() == 'day'].iterrows() for a in split_alias(r['Source header'])})
         if len(am): m = pd.concat([m, am.astype(str)], ignore_index=True)
         if "How" not in m.columns: m["How"] = ""
     wide = pd.DataFrame(index=tcs); long_rows = []; summary = []
     for _, r in m.iterrows():
         f, sk = r["Field"].strip(), r["Source"].strip()
-        if f.lower() in ("tc", "day", "") or not sk: continue
+        if f.lower() in ("tc", "day", "") or not sk or "folder" in nk(f): continue   # foldering has its own dedicated check
         kind = (r["Kind"].strip().lower() or "text")
         cd_al, s_al = split_alias(r["Center Data header"]), split_alias(r["Source header"])
         cv = field(cd_df, cd_lk, cd_al, kind)
@@ -273,6 +313,15 @@ def run(frames, mapping, tol=0.006, auto=True):
     summ = summ[["Field", "Source", "OK", "MISMATCH", "MISSING IN CD", "SOURCE BLANK", "NOT IN SOURCE", "BLANK BY RULE"]]
     num_cols = [c for c in summ.columns if c not in ("Field", "Source")]
     summ[num_cols] = summ[num_cols].astype(int)
+    fold_all = foldering_check(dfs, cd_df, cd_lk, tcs, warns)
+    if len(fold_all):
+        fc = fold_all.set_index("TC")["Check"]
+        wide["Foldering | CD"] = fold_all["Center Data Code"].values; wide["Foldering | SRC"] = fold_all["Audit Final Status"].values; wide["Foldering | GAP"] = fc.values
+        smap = {"OK": "OK", "MISSING IN CD": "MISSING IN CD", "SOURCE BLANK": "SOURCE BLANK", "NOT IN SOURCE": "NOT IN SOURCE"}
+        cnt = fc.map(lambda x: smap.get(x, "MISMATCH")).value_counts().to_dict()
+        summ = pd.concat([summ, pd.DataFrame([dict(Field="Foldering", Source="Audit Final: Folder Status (code and deduction only where 'No')", **{k: cnt.get(k, 0) for k in num_cols})])], ignore_index=True)
+        for _, fr_ in fold_all[~fold_all["Check"].isin(["OK", "NOT IN SOURCE"])].iterrows():
+            long_rows.append(dict(TC=fr_["TC"], Field="Foldering", CenterData=fr_["Center Data Code"] if pd.notna(fr_["Center Data Code"]) else fr_["Center Data Deduction"], Source=fr_["Audit Final Status"], Gap=fr_["Check"]))
     gaps = pd.DataFrame(long_rows, columns=["TC", "Field", "CenterData", "Source", "Gap"])
     # ---- rule re-check (day 1) ----
     day_al = []
@@ -295,13 +344,8 @@ def run(frames, mapping, tol=0.006, auto=True):
         for t in act.index[(act - exp).abs() > 0.01]:
             rr.append(dict(TC=t, Rule=label, Column=col, CenterData=act[t], Expected=exp[t], Diff=round(act[t] - exp[t], 2)))
     rules = pd.DataFrame(rr, columns=["TC", "Rule", "Column", "CenterData", "Expected", "Diff"])
-    fcols = sorted({c.rsplit(" | ", 1)[0] for c in wide.columns if "folder" in nk(c)})
-    fold = pd.DataFrame(columns=["TC", "Field", "Center Data", "Audit Final", "Gap"])
-    if fcols:
-        f0 = fcols[0]; cdv, srv, gpv = wide[f0 + " | CD"], wide[f0 + " | SRC"], wide[f0 + " | GAP"]
-        isno = lambda v: txt(v).startswith("no") or txt(v) in ("n", "pending", "not done")
-        sel = [t for t in wide.index if isno(srv[t]) or isno(cdv[t])]
-        fold = pd.DataFrame({"TC": sel, "Field": f0, "Center Data": [cdv[t] for t in sel], "Audit Final": [srv[t] for t in sel], "Gap": [gpv[t] for t in sel]})
+    keep = fold_all["Check"].ne("OK") | fold_all["Audit Final Status"].map(lambda v: txt(v).startswith("no")) | fold_all["Center Data Code"].notna()
+    fold = fold_all[keep].reset_index(drop=True) if len(fold_all) else fold_all
     return dict(summary=summ, gaps=gaps, rules=rules, compare=wide, foldering=fold, warns=warns, n=len(tcs))
 
 def auto_map(dfs, used, tcs, tol=0.006, min_match=0.95, min_vals=30, skip=()):
@@ -363,4 +407,3 @@ def to_excel_bytes(res):
             for col in sh.columns: sh.column_dimensions[col[0].column_letter].width = 16
             for cell in sh[1]: cell.font = Font(bold=True)
     return bio.getvalue()
-  
